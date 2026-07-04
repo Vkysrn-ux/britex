@@ -46,12 +46,15 @@ app.use(function(req, res, next) {
   next()
 })
 
+// Set to 0 once to force device to re-send all user records; will auto-advance after first OPERLOG push
+var operlogStamp = 0
+
 function sendHandshake(res, sn) {
   res.set('Content-Type', 'text/plain')
   res.send(
     'GET OPTION FROM: ' + sn + '\r\n' +
     'ATTLOGStamp=0\r\n' +
-    'OPERLOGStamp=9999\r\n' +
+    'OPERLOGStamp=' + operlogStamp + '\r\n' +
     'ATTPHOTOStamp=None\r\n' +
     'ErrorDelay=30\r\n' +
     'Delay=10\r\n' +
@@ -84,8 +87,9 @@ app.post(['/iclock/cdata', '/iclock/cdata.aspx'], async function(req, res) {
   var table = req.query.table || req.query.Table || ''
   var sn    = req.query.SN || req.query.sn || 'UNKNOWN'
   log('POST ' + req.path + ' table=' + table + ' SN=' + sn)
-  if (table.toUpperCase() !== 'ATTLOG') { return res.send('OK') }
-  await handleAttlog(req, res, sn)
+  if (table.toUpperCase() === 'ATTLOG')  return await handleAttlog(req, res, sn)
+  if (table.toUpperCase() === 'OPERLOG') return await handleOperlog(req, res, sn)
+  res.send('OK')
 })
 
 // Catch-all POST
@@ -93,12 +97,44 @@ app.post('*', async function(req, res) {
   var table = req.query.table || req.query.Table || ''
   var sn    = req.query.SN || req.query.sn || 'UNKNOWN'
   log('[ALT-POST] path=' + req.url + ' table=' + table + ' SN=' + sn)
-  if (table.toUpperCase() === 'ATTLOG') {
-    await handleAttlog(req, res, sn)
-  } else {
-    res.send('OK')
-  }
+  if (table.toUpperCase() === 'ATTLOG')  return await handleAttlog(req, res, sn)
+  if (table.toUpperCase() === 'OPERLOG') return await handleOperlog(req, res, sn)
+  res.send('OK')
 })
+
+async function handleOperlog(req, res, sn) {
+  var body  = typeof req.body === 'string' ? req.body : ''
+  var lines = body.split(/\r?\n/).map(function(l) { return l.trim() }).filter(Boolean)
+  log('OPERLOG SN=' + sn + ' lines=' + lines.length)
+  var saved = 0
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i]
+    if (!line.toUpperCase().startsWith('USER')) continue
+    // Format: USER\tPIN=5\tName=Kalaiselvi.S\tPri=0\tPasswd=\tCard=...\t...
+    var pin = '', name = '', pri = 0, card = ''
+    var parts = line.split('\t')
+    for (var j = 0; j < parts.length; j++) {
+      var p = parts[j]
+      if (p.toUpperCase().startsWith('PIN='))  pin  = p.slice(4).trim()
+      if (p.toUpperCase().startsWith('NAME=')) name = p.slice(5).trim()
+      if (p.toUpperCase().startsWith('PRI='))  pri  = parseInt(p.slice(4)) || 0
+      if (p.toUpperCase().startsWith('CARD=')) card = p.slice(5).trim()
+    }
+    if (!pin) continue
+    try {
+      await pool.query(
+        'INSERT INTO device_users(pin,name,privilege,card,synced_at) VALUES($1,$2,$3,$4,NOW()) ON CONFLICT(pin) DO UPDATE SET name=$2,privilege=$3,card=$4,synced_at=NOW()',
+        [pin, name, pri, card]
+      )
+      log('  USER PIN=' + pin + ' Name=' + name)
+      saved++
+    } catch(e) { log('  Error saving user: ' + e.message) }
+  }
+  // Advance stamp so device won't re-send same records
+  operlogStamp = 9999
+  log('  OPERLOG saved=' + saved + ' users')
+  res.send('OK')
+}
 
 async function handleAttlog(req, res, sn) {
   var body  = typeof req.body === 'string' ? req.body : ''
@@ -118,7 +154,8 @@ async function handleAttlog(req, res, sn) {
       var timeStr  = datetime.slice(spIdx + 1)
       if (!dateStr || !timeStr) continue
 
-      var empCode = DEVICE_PREFIX + '-' + pin.padStart(2, '0')
+      var btNum   = parseInt(pin, 10) - 4
+      var empCode = DEVICE_PREFIX + '-' + String(btNum).padStart(2, '0')
       var empRes  = await pool.query(
         'SELECT id FROM hr_employees WHERE employee_code=$1 OR employee_code=$2 OR employee_code=$3 LIMIT 1',
         [empCode, pin.padStart(2,'0'), pin]

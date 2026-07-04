@@ -71,8 +71,9 @@ export async function POST(req: Request) {
     for (const [key, times] of grouped.entries()) {
       const [pin, date] = key.split('__')
 
-      // Try BT-05, 05, 5
-      const empCode = `${DEVICE_PREFIX}-${pin.padStart(2, '0')}`
+      // Device PINs start at 5; DB codes start at BT-01 — offset is -4
+      const btNum   = parseInt(pin, 10) - 4
+      const empCode = `${DEVICE_PREFIX}-${String(btNum).padStart(2, '0')}`
       const empId =
         byCode.get(empCode.toLowerCase()) ??
         byCode.get(pin.padStart(2, '0').toLowerCase()) ??
