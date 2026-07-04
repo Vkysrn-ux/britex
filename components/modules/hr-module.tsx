@@ -15,8 +15,10 @@ type Employee = {
   id: number; employee_code: string; first_name: string; last_name: string
   email?: string; phone?: string; gender?: string; date_of_birth?: string
   date_of_joining: string; department_id?: number; department_name?: string
-  job_title?: string; employment_type: string; basic_salary: number
-  status: string
+  job_title?: string; employment_type: string; basic_salary: number; status: string
+  address?: string; emergency_contact?: string; emergency_phone?: string
+  bank_account?: string; bank_name?: string
+  father_name?: string; blood_group?: string; contribution_type?: string
 }
 
 type Department = { id: number; name: string; code: string; description?: string; employee_count: number; head_name?: string }
@@ -143,27 +145,434 @@ function HRDashboard() {
 
 // ─── Employees ────────────────────────────────────────────────────────────────
 
+const AVATAR_PALETTE = [
+  'bg-orange-500','bg-blue-500','bg-green-500','bg-purple-500',
+  'bg-pink-500','bg-teal-500','bg-indigo-500','bg-red-500',
+  'bg-yellow-500','bg-cyan-600','bg-rose-500','bg-emerald-500',
+]
+
+function avatarColor(name: string) {
+  let hash = 0; for (const c of name) hash = (hash * 31 + c.charCodeAt(0)) & 0xffff
+  return AVATAR_PALETTE[hash % AVATAR_PALETTE.length]
+}
+
+function avatarInitials(first: string, last: string) {
+  return ((first[0] || '') + (last[0] || '')).toUpperCase() || '?'
+}
+
+function EmployeeCard({ emp, onView, onEdit }: { emp: Employee; onView: () => void; onEdit: () => void }) {
+  const initials = avatarInitials(emp.first_name, emp.last_name)
+  const color    = avatarColor(emp.first_name + emp.last_name)
+  const isActive = emp.status === 'active'
+  return (
+    <div onClick={onView} className="bg-white border border-gray-200 rounded-2xl p-5 hover:shadow-md hover:border-orange-300 transition-all cursor-pointer relative flex flex-col gap-3">
+      {/* ID badge top-right */}
+      <span className="absolute top-4 right-4 text-xs font-mono text-gray-400">{emp.employee_code}</span>
+
+      {/* Avatar + status dot */}
+      <div className="relative w-fit">
+        <div className={`w-14 h-14 rounded-xl flex items-center justify-center text-white font-bold text-lg ${color}`}>
+          {initials}
+        </div>
+        <span className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-white ${isActive ? 'bg-green-500' : 'bg-gray-400'}`} />
+      </div>
+
+      {/* Name + designation */}
+      <div>
+        <p className="font-bold text-gray-900 text-sm leading-tight">{emp.first_name} {emp.last_name}</p>
+        <p className="text-xs text-orange-600 font-medium mt-0.5">{emp.job_title || '—'}</p>
+      </div>
+
+      {/* Meta rows */}
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-2 text-xs text-gray-500">
+          <Building2 className="w-3.5 h-3.5 shrink-0 text-gray-400" />
+          <span className="truncate">{emp.department_name || 'No Department'}</span>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-gray-500">
+          <svg className="w-3.5 h-3.5 shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>
+          <span className="font-mono">{emp.employment_type?.replace(/_/g, ' ')}</span>
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div className="flex items-center justify-between pt-1 border-t border-gray-100 mt-auto">
+        <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+          {emp.status.toUpperCase()}
+        </span>
+        <button onClick={e => { e.stopPropagation(); onEdit() }} className="text-gray-400 hover:text-orange-600 transition-colors p-1 rounded hover:bg-gray-50">
+          <Edit2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function EmployeeProfilePage({
+  emp: initialEmp, onBack, departments, onReload,
+}: {
+  emp: Employee; onBack: () => void; departments: Department[]; onReload: () => void
+}) {
+  const [emp, setEmp]           = useState<Employee>(initialEmp)
+  const [tab, setTab]           = useState<'personal' | 'bank' | 'education' | 'documents' | 'payroll'>('personal')
+  const [editing, setEditing]   = useState(false)
+  const [form, setForm]         = useState<Record<string, any>>({})
+  const [saving, setSaving]     = useState(false)
+  const [msg, setMsg]           = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+
+  const initials = avatarInitials(emp.first_name, emp.last_name)
+  const color    = avatarColor(emp.first_name + emp.last_name)
+  const isActive = emp.status === 'active'
+
+  const startEdit = () => {
+    setForm({
+      first_name: emp.first_name, last_name: emp.last_name || '',
+      email: emp.email || '', phone: emp.phone || '',
+      gender: emp.gender || '', date_of_birth: emp.date_of_birth?.slice(0,10) || '',
+      date_of_joining: emp.date_of_joining?.slice(0,10) || '',
+      department_id: emp.department_id || '', job_title: emp.job_title || '',
+      employment_type: emp.employment_type, basic_salary: emp.basic_salary,
+      address: emp.address || '', emergency_contact: emp.emergency_contact || '',
+      emergency_phone: emp.emergency_phone || '', father_name: emp.father_name || '',
+      blood_group: emp.blood_group || '', contribution_type: emp.contribution_type || '',
+      bank_account: emp.bank_account || '', bank_name: emp.bank_name || '',
+    })
+    setEditing(true)
+  }
+
+  const saveEdit = async () => {
+    setSaving(true); setMsg(null)
+    try {
+      const res  = await fetch(`/api/hr/employees/${emp.id}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form)
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setEmp(data.data); setEditing(false)
+      setMsg({ text: 'Employee updated successfully.', type: 'success' })
+      onReload()
+    } catch (err: any) { setMsg({ text: err.message, type: 'error' }) }
+    finally { setSaving(false) }
+  }
+
+  const handleStatusChange = async (newStatus: string) => {
+    if (!confirm(`${newStatus === 'inactive' ? 'Deactivate' : 'Activate'} ${emp.first_name}?`)) return
+    const res  = await fetch(`/api/hr/employees/${emp.id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: newStatus })
+    })
+    const data = await res.json()
+    if (res.ok) { setEmp(data.data); onReload() }
+  }
+
+  const handleDelete = async () => {
+    if (!confirm(`Permanently terminate ${emp.first_name} ${emp.last_name}?`)) return
+    await fetch(`/api/hr/employees/${emp.id}`, { method: 'DELETE' })
+    onReload(); onBack()
+  }
+
+  const Field = ({ label, value }: { label: string; value?: string | null }) => (
+    <div>
+      <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">{label}</p>
+      <p className="text-sm text-gray-900">{value || '—'}</p>
+    </div>
+  )
+
+  const EditField = ({ label, name, type = 'text', children }: { label: string; name: string; type?: string; children?: React.ReactNode }) => (
+    <div>
+      <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 block">{label}</label>
+      {children ?? (
+        <Input type={type} value={form[name] ?? ''} onChange={e => setForm((f: any) => ({ ...f, [name]: e.target.value }))} className="text-sm" />
+      )}
+    </div>
+  )
+
+  const TABS = [
+    { id: 'personal',   label: 'Personal',        icon: '👤' },
+    { id: 'education',  label: 'Education',        icon: '🎓' },
+    { id: 'bank',       label: 'Bank & Statutory', icon: '🏦' },
+    { id: 'documents',  label: 'Documents',        icon: '📄' },
+    { id: 'payroll',    label: 'Payroll',          icon: '💰' },
+  ] as const
+
+  return (
+    <div className="space-y-4">
+      {/* Breadcrumb */}
+      <div className="flex items-center gap-2 text-sm">
+        <button onClick={onBack} className="text-gray-400 hover:text-orange-600 transition-colors">Directory</button>
+        <span className="text-gray-300">/</span>
+        <span className="text-gray-700 font-medium">{emp.first_name} {emp.last_name}</span>
+      </div>
+
+      {/* Profile header card */}
+      <div className="bg-white border border-gray-200 rounded-2xl p-6">
+        <div className="flex items-start gap-5">
+          {/* Avatar */}
+          <div className="relative shrink-0">
+            <div className={`w-20 h-20 rounded-2xl flex items-center justify-center text-white font-bold text-2xl ${color}`}>
+              {initials}
+            </div>
+            <span className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white ${isActive ? 'bg-green-500' : 'bg-gray-400'}`} />
+          </div>
+
+          {/* Info */}
+          <div className="flex-1 min-w-0">
+            <h1 className="text-2xl font-bold text-gray-900">{emp.first_name} {emp.last_name}</h1>
+            <div className="flex items-center gap-3 mt-1 text-sm flex-wrap">
+              <span className="font-mono text-gray-400">{emp.employee_code}</span>
+              <span className="text-orange-600 font-semibold">{emp.job_title || '—'}</span>
+              <span className="flex items-center gap-1 text-gray-500">
+                <Building2 className="w-3.5 h-3.5" />{emp.department_name || '—'}
+              </span>
+            </div>
+            <div className="flex gap-2 mt-2 flex-wrap">
+              <span className={`text-[10px] font-bold px-2.5 py-1 rounded uppercase ${isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                {emp.status}
+              </span>
+              <span className="text-[10px] font-bold px-2.5 py-1 rounded uppercase bg-purple-100 text-purple-700">
+                {emp.employment_type?.replace(/_/g,' ')}
+              </span>
+              {emp.contribution_type && (
+                <span className="text-[10px] font-bold px-2.5 py-1 rounded uppercase bg-blue-100 text-blue-700">
+                  {emp.contribution_type}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="flex gap-2 shrink-0">
+            {isActive ? (
+              <button onClick={() => handleStatusChange('inactive')} className="flex items-center gap-1.5 px-3 py-1.5 border border-orange-300 text-orange-600 rounded-lg text-sm hover:bg-orange-50">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" /></svg>
+                Deactivate
+              </button>
+            ) : (
+              <button onClick={() => handleStatusChange('active')} className="flex items-center gap-1.5 px-3 py-1.5 border border-green-300 text-green-600 rounded-lg text-sm hover:bg-green-50">
+                Activate
+              </button>
+            )}
+            <button onClick={handleDelete} className="flex items-center gap-1.5 px-3 py-1.5 border border-red-200 text-red-500 rounded-lg text-sm hover:bg-red-50">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+              Delete
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {msg && <div className={`p-3 rounded-lg text-sm ${msg.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>{msg.text}</div>}
+
+      {/* Tabs */}
+      <div className="flex gap-1 border-b border-gray-200 overflow-x-auto">
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id as any)}
+            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${tab === t.id ? 'border-orange-600 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-800'}`}>
+            <span>{t.icon}</span>{t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── PERSONAL TAB ── */}
+      {tab === 'personal' && (
+        <div className="bg-white border border-gray-200 rounded-2xl p-6 space-y-6">
+          <div className="flex items-center justify-between">
+            <h2 className="font-bold text-gray-900">Personal & Employment Details</h2>
+            {editing ? (
+              <div className="flex gap-2">
+                <Button onClick={saveEdit} disabled={saving} size="sm" className="bg-orange-600 hover:bg-orange-700 text-white">
+                  {saving ? 'Saving…' : 'Save Changes'}
+                </Button>
+                <Button onClick={() => setEditing(false)} size="sm" variant="outline">Cancel</Button>
+              </div>
+            ) : (
+              <button onClick={startEdit} className="flex items-center gap-1.5 px-3 py-1.5 border border-orange-300 text-orange-600 rounded-lg text-sm hover:bg-orange-50">
+                <Edit2 className="w-3.5 h-3.5" />Edit
+              </button>
+            )}
+          </div>
+
+          {editing ? (
+            <div className="space-y-5">
+              {/* Personal fields in edit mode */}
+              <div className="grid grid-cols-3 gap-4">
+                <EditField label="First Name" name="first_name" />
+                <EditField label="Last Name" name="last_name" />
+                <EditField label="Phone" name="phone" />
+                <EditField label="Email" name="email" type="email" />
+                <EditField label="Date of Birth" name="date_of_birth" type="date" />
+                <EditField label="Gender" name="gender">
+                  <select value={form.gender || ''} onChange={e => setForm((f: any) => ({ ...f, gender: e.target.value }))} className="w-full border rounded-md px-3 py-2 text-sm">
+                    <option value="">Select</option><option value="male">Male</option><option value="female">Female</option><option value="other">Other</option>
+                  </select>
+                </EditField>
+                <EditField label="Father's Name" name="father_name" />
+                <EditField label="Blood Group" name="blood_group">
+                  <select value={form.blood_group || ''} onChange={e => setForm((f: any) => ({ ...f, blood_group: e.target.value }))} className="w-full border rounded-md px-3 py-2 text-sm">
+                    <option value="">Select</option>
+                    {['A+','A-','B+','B-','AB+','AB-','O+','O-'].map(g => <option key={g} value={g}>{g}</option>)}
+                  </select>
+                </EditField>
+                <EditField label="Emergency Contact" name="emergency_contact" />
+              </div>
+              <hr className="border-gray-100" />
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Employment Information</p>
+              <div className="grid grid-cols-3 gap-4">
+                <EditField label="Department" name="department_id">
+                  <select value={form.department_id || ''} onChange={e => setForm((f: any) => ({ ...f, department_id: e.target.value }))} className="w-full border rounded-md px-3 py-2 text-sm">
+                    <option value="">None</option>
+                    {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  </select>
+                </EditField>
+                <EditField label="Designation" name="job_title" />
+                <EditField label="Date of Joining" name="date_of_joining" type="date" />
+                <EditField label="Employment Type" name="employment_type">
+                  <select value={form.employment_type || 'full_time'} onChange={e => setForm((f: any) => ({ ...f, employment_type: e.target.value }))} className="w-full border rounded-md px-3 py-2 text-sm">
+                    <option value="full_time">Full Time</option><option value="part_time">Part Time</option>
+                    <option value="contract">Contract</option><option value="intern">Intern</option>
+                  </select>
+                </EditField>
+                <EditField label="Contribution Type" name="contribution_type">
+                  <select value={form.contribution_type || ''} onChange={e => setForm((f: any) => ({ ...f, contribution_type: e.target.value }))} className="w-full border rounded-md px-3 py-2 text-sm">
+                    <option value="">None</option>
+                    <option value="ESI+PF">ESI + PF</option>
+                    <option value="PF Only">PF Only</option>
+                    <option value="ESI Only">ESI Only</option>
+                    <option value="BOTH">Both</option>
+                  </select>
+                </EditField>
+                <EditField label="Basic Salary (₹)" name="basic_salary" type="number" />
+                <div className="col-span-3">
+                  <EditField label="Address" name="address">
+                    <textarea value={form.address || ''} onChange={e => setForm((f: any) => ({ ...f, address: e.target.value }))} rows={2} className="w-full border rounded-md px-3 py-2 text-sm" />
+                  </EditField>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {/* Read-only view */}
+              <div className="grid grid-cols-3 gap-x-8 gap-y-5">
+                <Field label="Full Name"         value={`${emp.first_name} ${emp.last_name}`.trim()} />
+                <Field label="Employee Code"     value={emp.employee_code} />
+                <Field label="Phone"             value={emp.phone} />
+                <Field label="Email"             value={emp.email} />
+                <Field label="Date of Birth"     value={emp.date_of_birth ? fmtDate(emp.date_of_birth) : undefined} />
+                <Field label="Gender"            value={emp.gender ? emp.gender.charAt(0).toUpperCase() + emp.gender.slice(1) : undefined} />
+                <Field label="Father's Name"     value={emp.father_name} />
+                <Field label="Blood Group"       value={emp.blood_group} />
+                <Field label="Emergency Contact" value={emp.emergency_contact} />
+              </div>
+
+              <hr className="border-gray-100" />
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Employment Information</p>
+
+              <div className="grid grid-cols-3 gap-x-8 gap-y-5">
+                <Field label="Department"       value={emp.department_name} />
+                <Field label="Designation"      value={emp.job_title} />
+                <Field label="Date of Joining"  value={emp.date_of_joining ? fmtDate(emp.date_of_joining) : undefined} />
+                <Field label="Employee Type"    value={emp.employment_type?.replace(/_/g,' ')} />
+                <Field label="Contribution Type" value={emp.contribution_type} />
+                <Field label="Status"           value={emp.status?.charAt(0).toUpperCase() + emp.status?.slice(1)} />
+              </div>
+              {emp.address && (
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Address</p>
+                  <p className="text-sm text-gray-900">{emp.address}</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── BANK & STATUTORY TAB ── */}
+      {tab === 'bank' && (
+        <div className="bg-white border border-gray-200 rounded-2xl p-6 space-y-6">
+          <div className="flex items-center justify-between">
+            <h2 className="font-bold text-gray-900">Bank & Statutory Details</h2>
+            {!editing && <button onClick={startEdit} className="flex items-center gap-1.5 px-3 py-1.5 border border-orange-300 text-orange-600 rounded-lg text-sm hover:bg-orange-50"><Edit2 className="w-3.5 h-3.5" />Edit</button>}
+            {editing && (
+              <div className="flex gap-2">
+                <Button onClick={saveEdit} disabled={saving} size="sm" className="bg-orange-600 hover:bg-orange-700 text-white">{saving ? 'Saving…' : 'Save'}</Button>
+                <Button onClick={() => setEditing(false)} size="sm" variant="outline">Cancel</Button>
+              </div>
+            )}
+          </div>
+          {editing ? (
+            <div className="grid grid-cols-3 gap-4">
+              <EditField label="Bank Account No." name="bank_account" />
+              <EditField label="Bank Name" name="bank_name" />
+              <EditField label="Contribution Type" name="contribution_type">
+                <select value={form.contribution_type || ''} onChange={e => setForm((f: any) => ({ ...f, contribution_type: e.target.value }))} className="w-full border rounded-md px-3 py-2 text-sm">
+                  <option value="">None</option>
+                  <option value="ESI+PF">ESI + PF</option>
+                  <option value="PF Only">PF Only</option>
+                  <option value="ESI Only">ESI Only</option>
+                  <option value="BOTH">Both</option>
+                </select>
+              </EditField>
+            </div>
+          ) : (
+            <div className="grid grid-cols-3 gap-x-8 gap-y-5">
+              <Field label="Bank Account No." value={emp.bank_account} />
+              <Field label="Bank Name"         value={emp.bank_name} />
+              <Field label="Contribution Type" value={emp.contribution_type} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── OTHER TABS — PLACEHOLDERS ── */}
+      {(tab === 'education' || tab === 'documents' || tab === 'payroll') && (
+        <div className="bg-white border border-gray-200 rounded-2xl p-12 text-center text-gray-400">
+          <p className="text-4xl mb-3">{tab === 'education' ? '🎓' : tab === 'documents' ? '📄' : '💰'}</p>
+          <p className="font-semibold text-gray-600">{tab.charAt(0).toUpperCase() + tab.slice(1)} section coming soon</p>
+          <p className="text-sm mt-1">This section will be available in a future update.</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function EmployeesSection({ departments }: { departments: Department[] }) {
-  const [employees, setEmployees] = useState<Employee[]>([])
-  const [loading, setLoading] = useState(true)
-  const [search, setSearch] = useState('')
+  const [employees, setEmployees]   = useState<Employee[]>([])
+  const [loading, setLoading]       = useState(true)
+  const [search, setSearch]         = useState('')
   const [statusFilter, setStatusFilter] = useState('active')
+  const [typeFilter, setTypeFilter] = useState('')
   const [deptFilter, setDeptFilter] = useState('')
-  const [showForm, setShowForm] = useState(false)
-  const [editEmp, setEditEmp] = useState<Employee | null>(null)
-  const [form, setForm] = useState<Record<string, any>>({
+  const [viewMode, setViewMode]     = useState<'grid' | 'list'>('grid')
+  const [showForm, setShowForm]     = useState(false)
+  const [editEmp, setEditEmp]       = useState<Employee | null>(null)
+  const [profileEmp, setProfileEmp] = useState<Employee | null>(null)
+  const [saving, setSaving]         = useState(false)
+  const [msg, setMsg]               = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+  const [importResult, setImportResult] = useState<any>(null)
+  const [importing, setImporting]   = useState(false)
+  const [xlFile, setXlFile]         = useState<File | null>(null)
+  const [showImport, setShowImport] = useState(false)
+  const [syncingBT, setSyncingBT]     = useState(false)
+  const [syncResult, setSyncResult]   = useState<any>(null)
+  const [resetting, setResetting]     = useState(false)
+  const [resetResult, setResetResult] = useState<any>(null)
+  const [importingDat, setImportingDat] = useState(false)
+  const [datResult, setDatResult]       = useState<any>(null)
+
+  const blankForm = {
     employee_code: '', first_name: '', last_name: '', email: '', phone: '',
     gender: '', date_of_birth: '', date_of_joining: new Date().toISOString().slice(0, 10),
     department_id: '', job_title: '', employment_type: 'full_time', basic_salary: '',
-    bank_account: '', bank_name: '', address: '', emergency_contact: '', emergency_phone: ''
-  })
-  const [saving, setSaving] = useState(false)
-  const [msg, setMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+  }
+  const [form, setForm] = useState<Record<string, any>>(blankForm)
 
   const load = useCallback(() => {
     setLoading(true)
-    const q = new URLSearchParams({ status: statusFilter, ...(search ? { search } : {}), ...(deptFilter ? { department_id: deptFilter } : {}) })
-    fetch(`/api/hr/employees?${q}`).then(r => r.json()).then(d => { setEmployees(d.data || []); setLoading(false) })
+    const q = new URLSearchParams({
+      ...(statusFilter !== 'all' ? { status: statusFilter } : {}),
+      ...(search      ? { search }                       : {}),
+      ...(deptFilter  ? { department_id: deptFilter }    : {}),
+    })
+    fetch(`/api/hr/employees?${q}`).then(r => r.json())
+      .then(d => { setEmployees(d.data || []); setLoading(false) })
       .catch(() => setLoading(false))
   }, [statusFilter, search, deptFilter])
 
@@ -175,74 +584,174 @@ function EmployeesSection({ departments }: { departments: Department[] }) {
       employee_code: e.employee_code, first_name: e.first_name, last_name: e.last_name,
       email: e.email || '', phone: e.phone || '', gender: e.gender || '',
       date_of_birth: e.date_of_birth ? e.date_of_birth.slice(0, 10) : '',
-      date_of_joining: e.date_of_joining.slice(0, 10),
+      date_of_joining: e.date_of_joining ? e.date_of_joining.slice(0, 10) : '',
       department_id: e.department_id || '', job_title: e.job_title || '',
       employment_type: e.employment_type, basic_salary: e.basic_salary,
-      bank_account: '', bank_name: '', address: '', emergency_contact: '', emergency_phone: ''
     })
     setShowForm(true)
   }
 
-  const resetForm = () => {
-    setEditEmp(null)
-    setForm({ employee_code: '', first_name: '', last_name: '', email: '', phone: '',
-      gender: '', date_of_birth: '', date_of_joining: new Date().toISOString().slice(0, 10),
-      department_id: '', job_title: '', employment_type: 'full_time', basic_salary: '',
-      bank_account: '', bank_name: '', address: '', emergency_contact: '', emergency_phone: '' })
-    setShowForm(false)
-  }
+  const resetForm = () => { setEditEmp(null); setForm(blankForm); setShowForm(false) }
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault(); setSaving(true); setMsg(null)
+  const handleSubmit = async (ev: React.FormEvent) => {
+    ev.preventDefault(); setSaving(true); setMsg(null)
     try {
-      const url = editEmp ? `/api/hr/employees/${editEmp.id}` : '/api/hr/employees'
+      const url    = editEmp ? `/api/hr/employees/${editEmp.id}` : '/api/hr/employees'
       const method = editEmp ? 'PUT' : 'POST'
-      const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
+      const res  = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Save failed')
       setMsg({ text: editEmp ? 'Employee updated.' : 'Employee added.', type: 'success' })
       resetForm(); load()
-    } catch (err: any) {
-      setMsg({ text: err.message, type: 'error' })
-    } finally { setSaving(false) }
+    } catch (err: any) { setMsg({ text: err.message, type: 'error' }) }
+    finally { setSaving(false) }
   }
 
-  const [importing, setImporting] = useState(false)
-  const [importResult, setImportResult] = useState<any>(null)
-
-  const handleBiometricImport = async () => {
+  const handleExcelImport = async () => {
+    if (!xlFile) return
     setImporting(true); setMsg(null); setImportResult(null)
     try {
-      const res = await fetch('/api/hr/employees/import-biometric', { method: 'POST' })
+      const fd = new FormData(); fd.append('file', xlFile)
+      const res  = await fetch('/api/hr/employees/import-excel', { method: 'POST', body: fd })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       setImportResult(data)
-      setMsg({ text: `Import complete: ${data.summary.created} employees created, ${data.summary.skipped} skipped.`, type: 'success' })
+      setMsg({ text: `Import complete: ${data.summary.created} created, ${data.summary.updated} updated.`, type: 'success' })
+      setXlFile(null); load()
+    } catch (err: any) { setMsg({ text: err.message, type: 'error' }) }
+    finally { setImporting(false) }
+  }
+
+  const handleResetImport = async () => {
+    const ok = confirm(
+      '⚠️ WARNING: This will DELETE all existing employees and ALL attendance except June 2026, then re-import all 57 employees from the master Excel.\n\nJune attendance will be re-linked by employee name.\n\nType OK to proceed.'
+    )
+    if (!ok) return
+    setResetting(true); setResetResult(null); setMsg(null)
+    try {
+      const res  = await fetch('/api/hr/employees/reset-import', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setResetResult(data)
+      setMsg({ text: `Reset complete: ${data.summary.employees_created} employees imported, June attendance: ${data.summary.june_attendance_restored} restored.`, type: 'success' })
       load()
-    } catch (err: any) {
-      setMsg({ text: err.message, type: 'error' })
-    } finally { setImporting(false) }
+    } catch (err: any) { setMsg({ text: err.message, type: 'error' }) }
+    finally { setResetting(false) }
+  }
+
+  const handleSyncBT = async () => {
+    if (!confirm('This will update all employee codes to BT-XX format using the master Excel. Continue?')) return
+    setSyncingBT(true); setSyncResult(null); setMsg(null)
+    try {
+      const res  = await fetch('/api/hr/employees/sync-bt-codes', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setSyncResult(data)
+      setMsg({ text: `BT code sync done: ${data.summary.updated} updated, ${data.summary.skipped} skipped.`, type: 'success' })
+      load()
+    } catch (err: any) { setMsg({ text: err.message, type: 'error' }) }
+    finally { setSyncingBT(false) }
+  }
+
+  const handleDatImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ''
+    setImportingDat(true); setDatResult(null); setMsg(null)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res  = await fetch('/api/hr/attendance/import-dat', { method: 'POST', body: fd })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setDatResult(data)
+      setMsg({ text: `DAT import done: ${data.summary.saved} records saved, ${data.summary.skipped} skipped.`, type: 'success' })
+    } catch (err: any) { setMsg({ text: err.message, type: 'error' }) }
+    finally { setImportingDat(false) }
+  }
+
+  // Filtered employees (client-side type filter)
+  const visible = typeFilter
+    ? employees.filter(e => e.employment_type === typeFilter)
+    : employees
+
+  const totalActive   = employees.filter(e => e.status === 'active').length
+  const totalInactive = employees.filter(e => e.status !== 'active').length
+
+  if (profileEmp) {
+    return (
+      <EmployeeProfilePage
+        emp={profileEmp}
+        onBack={() => setProfileEmp(null)}
+        departments={departments}
+        onReload={load}
+      />
+    )
   }
 
   return (
     <div className="space-y-4">
+      {/* Sub-header */}
       <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-gray-900">Employees</h2>
-          <p className="text-sm text-gray-500">{employees.length} records</p>
-        </div>
-        <div className="flex gap-2">
-          <Button onClick={handleBiometricImport} disabled={importing} variant="outline"
-            className="border-orange-300 text-orange-700 hover:bg-orange-50">
-            {importing
-              ? <><RefreshCw className="w-4 h-4 mr-2 animate-spin" />Importing…</>
-              : <><svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>Import Biometric</>
-            }
+        <p className="text-sm text-gray-500">
+          Centralized management for all <strong>{employees.length}</strong> employees across <strong>{departments.length}</strong> departments.
+        </p>
+        <div className="flex items-center gap-2">
+          <label htmlFor="xl-upload" className="cursor-pointer inline-flex items-center gap-2 px-3 py-2 bg-orange-600 hover:bg-orange-700 text-white text-sm rounded-lg font-medium">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+            Upload Excel
+          </label>
+          <input id="xl-upload" type="file" accept=".xlsx,.xls,.csv" className="hidden"
+            onChange={e => { setXlFile(e.target.files?.[0] || null); setShowImport(true) }} />
+
+          <button onClick={handleSyncBT} disabled={syncingBT}
+            className="inline-flex items-center gap-2 px-3 py-2 border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 text-sm rounded-lg font-medium disabled:opacity-50">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+            {syncingBT ? 'Syncing…' : 'Sync BT Codes'}
+          </button>
+
+          <button onClick={handleResetImport} disabled={resetting}
+            className="inline-flex items-center gap-2 px-3 py-2 border border-red-300 bg-red-50 hover:bg-red-100 text-red-700 text-sm rounded-lg font-medium disabled:opacity-50">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+            {resetting ? 'Resetting…' : 'Reset & Import All'}
+          </button>
+
+          <label htmlFor="dat-upload" className={`cursor-pointer inline-flex items-center gap-2 px-3 py-2 border border-purple-300 bg-purple-50 hover:bg-purple-100 text-purple-700 text-sm rounded-lg font-medium ${importingDat ? 'opacity-50 pointer-events-none' : ''}`}>
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
+            {importingDat ? 'Importing…' : 'Import Device .dat'}
+          </label>
+          <input id="dat-upload" type="file" accept=".dat,.txt" className="hidden" onChange={handleDatImport} />
+
+          {/* View toggle */}
+          <div className="flex border border-gray-200 rounded-lg overflow-hidden">
+            <button onClick={() => setViewMode('grid')} className={`px-3 py-2 flex items-center gap-1.5 text-sm ${viewMode === 'grid' ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-50'}`}>
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+              Grid
+            </button>
+            <button onClick={() => setViewMode('list')} className={`px-3 py-2 flex items-center gap-1.5 text-sm ${viewMode === 'list' ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-50'}`}>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
+              List
+            </button>
+          </div>
+          <Button onClick={() => { resetForm(); setShowForm(true) }} className="bg-gray-900 hover:bg-gray-800 text-white">
+            <Plus className="w-4 h-4 mr-1" />Add Employee
           </Button>
-          <Button onClick={() => { resetForm(); setShowForm(true) }} className="bg-orange-600 hover:bg-orange-700 text-white">
-            <Plus className="w-4 h-4 mr-2" />Add Employee
-          </Button>
         </div>
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-4 gap-3">
+        {[
+          { label: 'TOTAL EMPLOYEES', value: employees.length,   cls: 'text-gray-900' },
+          { label: 'ACTIVE',          value: totalActive,         cls: 'text-green-600' },
+          { label: 'INACTIVE',        value: totalInactive,       cls: 'text-gray-400' },
+          { label: 'DEPARTMENTS',     value: departments.length,  cls: 'text-orange-600' },
+        ].map(s => (
+          <div key={s.label} className="bg-white border border-gray-200 rounded-xl px-5 py-4">
+            <p className="text-[10px] font-semibold text-gray-400 tracking-widest mb-1">{s.label}</p>
+            <p className={`text-3xl font-bold ${s.cls}`}>{s.value}</p>
+          </div>
+        ))}
       </div>
 
       {msg && (
@@ -251,52 +760,179 @@ function EmployeesSection({ departments }: { departments: Department[] }) {
         </div>
       )}
 
-      {importResult && (
-        <Card className="border-orange-100">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-6 mb-3">
-              <div className="text-center"><p className="text-2xl font-bold text-green-600">{importResult.summary.created}</p><p className="text-xs text-gray-500">Created</p></div>
-              <div className="text-center"><p className="text-2xl font-bold text-gray-400">{importResult.summary.skipped}</p><p className="text-xs text-gray-500">Skipped</p></div>
-              <div className="text-center"><p className="text-2xl font-bold text-blue-600">{importResult.summary.departments_created}</p><p className="text-xs text-gray-500">Departments</p></div>
-              <div className="flex-1">
-                <p className="text-xs font-medium text-gray-600 mb-1">Departments created:</p>
-                <div className="flex flex-wrap gap-1">
-                  {importResult.departments.map((d: string) => (
-                    <span key={d} className="px-2 py-0.5 bg-orange-100 text-orange-700 rounded text-xs">{d}</span>
-                  ))}
-                </div>
-              </div>
-              <Button size="sm" variant="ghost" onClick={() => setImportResult(null)} className="text-gray-400 hover:text-gray-600 self-start">✕</Button>
+      {/* Excel import panel */}
+      {showImport && (
+        <div className="border border-orange-200 bg-orange-50/40 rounded-xl p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-semibold text-gray-800 text-sm">Import Employee List from Excel</p>
+              <p className="text-xs text-gray-500 mt-0.5">Auto-detects columns: Name, Emp Code, Department, Designation, Phone, Email, Joining Date, Salary…</p>
             </div>
-            <div className="max-h-48 overflow-y-auto">
+            <button onClick={() => { setShowImport(false); setXlFile(null) }} className="text-gray-400 hover:text-gray-600">✕</button>
+          </div>
+          <div className="flex items-center gap-3">
+            <label htmlFor="xl-upload2" className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 border-2 border-dashed border-orange-300 rounded-lg text-sm text-orange-700 hover:bg-orange-50">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+              {xlFile ? xlFile.name : 'Choose file'}
+            </label>
+            <input id="xl-upload2" type="file" accept=".xlsx,.xls,.csv" className="hidden"
+              onChange={e => setXlFile(e.target.files?.[0] || null)} />
+            {xlFile && <span className="text-xs text-gray-400">{(xlFile.size/1024).toFixed(1)} KB</span>}
+            <Button onClick={handleExcelImport} disabled={!xlFile || importing} className="bg-orange-600 hover:bg-orange-700 text-white">
+              {importing ? 'Importing…' : 'Import'}
+            </Button>
+          </div>
+
+          {importResult && (
+            <div className="space-y-3">
+              {/* Detected columns */}
+              {importResult.detected_columns && (
+                <div className="bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 text-xs text-blue-700">
+                  <strong>Detected columns:</strong>{' '}
+                  {Object.entries(importResult.detected_columns).map(([k, v]) => `${k} → "${v}"`).join(' · ')}
+                </div>
+              )}
+              {/* Summary */}
+              <div className="grid grid-cols-4 gap-2">
+                {[
+                  { label: 'Created',     value: importResult.summary.created,  cls: 'bg-green-50 border-green-200 text-green-700' },
+                  { label: 'Updated',     value: importResult.summary.updated,  cls: 'bg-blue-50 border-blue-200 text-blue-700' },
+                  { label: 'Skipped',     value: importResult.summary.skipped,  cls: 'bg-yellow-50 border-yellow-200 text-yellow-700' },
+                  { label: 'Depts',       value: importResult.summary.departments_created, cls: 'bg-orange-50 border-orange-200 text-orange-700' },
+                ].map(s => (
+                  <div key={s.label} className={`border rounded-xl p-3 text-center ${s.cls}`}>
+                    <p className="text-2xl font-bold">{s.value}</p>
+                    <p className="text-xs">{s.label}</p>
+                  </div>
+                ))}
+              </div>
+              {/* Detail table */}
+              <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg">
+                <table className="w-full text-xs">
+                  <thead><tr className="bg-gray-50 sticky top-0">
+                    <th className="px-3 py-2 text-left text-gray-500">Code</th>
+                    <th className="px-3 py-2 text-left text-gray-500">Name</th>
+                    <th className="px-3 py-2 text-left text-gray-500">Department</th>
+                    <th className="px-3 py-2 text-left text-gray-500">Result</th>
+                  </tr></thead>
+                  <tbody>
+                    {importResult.details.map((d: any, i: number) => (
+                      <tr key={i} className="border-t border-gray-100">
+                        <td className="px-3 py-1.5 font-mono">{d.code}</td>
+                        <td className="px-3 py-1.5">{d.name}</td>
+                        <td className="px-3 py-1.5 text-gray-400">{d.dept}</td>
+                        <td className="px-3 py-1.5">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${d.action === 'created' ? 'bg-green-100 text-green-700' : d.action === 'updated' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'}`}>{d.action}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* BT code sync result */}
+      {syncResult && (
+        <div className="border border-blue-200 bg-blue-50/40 rounded-xl p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="font-semibold text-sm text-blue-800">
+              BT Code Sync — {syncResult.summary.updated} updated · {syncResult.summary.skipped} skipped
+            </p>
+            <button onClick={() => setSyncResult(null)} className="text-gray-400 hover:text-gray-600">✕</button>
+          </div>
+          {syncResult.updated?.length > 0 && (
+            <div className="max-h-48 overflow-y-auto border border-blue-100 rounded-lg bg-white">
               <table className="w-full text-xs">
-                <thead><tr className="border-b bg-gray-50">
-                  <th className="px-2 py-1.5 text-left text-gray-500">Code</th>
-                  <th className="px-2 py-1.5 text-left text-gray-500">Name</th>
-                  <th className="px-2 py-1.5 text-left text-gray-500">Department</th>
-                  <th className="px-2 py-1.5 text-left text-gray-500">Result</th>
+                <thead><tr className="bg-blue-50 sticky top-0">
+                  <th className="px-3 py-2 text-left text-blue-600">Change</th>
                 </tr></thead>
                 <tbody>
-                  {importResult.details.map((d: any, i: number) => (
-                    <tr key={i} className="border-b border-gray-50">
-                      <td className="px-2 py-1 font-mono">{d.code}</td>
-                      <td className="px-2 py-1">{d.name}</td>
-                      <td className="px-2 py-1 text-gray-500">{d.dept}</td>
-                      <td className="px-2 py-1">
-                        <span className={`px-1.5 py-0.5 rounded text-xs ${d.action === 'created' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{d.action}</span>
-                      </td>
+                  {syncResult.updated.map((line: string, i: number) => (
+                    <tr key={i} className="border-t border-gray-100">
+                      <td className="px-3 py-1.5 font-mono text-gray-700">{line}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          </CardContent>
-        </Card>
+          )}
+          {syncResult.skipped?.length > 0 && (
+            <div className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2 space-y-0.5">
+              <p className="font-semibold mb-1">Unmatched (need manual fix):</p>
+              {syncResult.skipped.map((line: string, i: number) => <p key={i}>{line}</p>)}
+            </div>
+          )}
+        </div>
       )}
 
+      {/* Reset & Import result */}
+      {resetResult && (
+        <div className="border border-green-200 bg-green-50/40 rounded-xl p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-semibold text-sm text-green-800">Reset & Import Complete</p>
+              <p className="text-xs text-green-700 mt-0.5">
+                {resetResult.summary.employees_created} employees imported ·{' '}
+                {resetResult.summary.employees_skipped} skipped ·{' '}
+                June attendance: {resetResult.summary.june_attendance_restored} restored
+                {resetResult.summary.june_attendance_unmatched > 0 && `, ${resetResult.summary.june_attendance_unmatched} unmatched`}
+              </p>
+            </div>
+            <button onClick={() => setResetResult(null)} className="text-gray-400 hover:text-gray-600">✕</button>
+          </div>
+          {resetResult.details?.some((d: any) => d.action?.startsWith('error')) && (
+            <div className="max-h-48 overflow-y-auto border border-red-100 rounded-lg bg-white">
+              <table className="w-full text-xs">
+                <thead><tr className="bg-red-50 sticky top-0">
+                  <th className="px-3 py-2 text-left text-red-600">Code</th>
+                  <th className="px-3 py-2 text-left text-red-600">Name</th>
+                  <th className="px-3 py-2 text-left text-red-600">Error</th>
+                </tr></thead>
+                <tbody>
+                  {resetResult.details.filter((d: any) => d.action?.startsWith('error')).map((d: any, i: number) => (
+                    <tr key={i} className="border-t border-gray-100">
+                      <td className="px-3 py-1.5 font-mono">{d.code}</td>
+                      <td className="px-3 py-1.5">{d.name}</td>
+                      <td className="px-3 py-1.5 text-red-600">{d.action}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* DAT import result */}
+      {datResult && (
+        <div className="border border-purple-200 bg-purple-50/40 rounded-xl p-4 space-y-2">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-semibold text-sm text-purple-800">Device .dat Import Complete</p>
+              <p className="text-xs text-purple-700 mt-0.5">
+                {datResult.summary.total_punch_lines} punch lines · {datResult.summary.employee_days_processed} employee-days processed · {datResult.summary.saved} saved · {datResult.summary.skipped} skipped
+              </p>
+            </div>
+            <button onClick={() => setDatResult(null)} className="text-gray-400 hover:text-gray-600">✕</button>
+          </div>
+          {datResult.errors?.length > 0 && (
+            <div className="max-h-32 overflow-y-auto text-xs text-red-600 bg-white border border-red-100 rounded p-2 space-y-0.5">
+              {datResult.errors.map((e: string, i: number) => <div key={i}>{e}</div>)}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Add/Edit Form */}
       {showForm && (
         <Card className="border-orange-200">
-          <CardHeader className="pb-3"><CardTitle className="text-base">{editEmp ? 'Edit Employee' : 'New Employee'}</CardTitle></CardHeader>
+          <CardHeader className="pb-3 flex flex-row items-center justify-between">
+            <CardTitle className="text-base">{editEmp ? 'Edit Employee' : 'New Employee'}</CardTitle>
+            <button onClick={resetForm} className="text-gray-400 hover:text-gray-600">✕</button>
+          </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="grid grid-cols-3 gap-3">
@@ -304,8 +940,8 @@ function EmployeesSection({ departments }: { departments: Department[] }) {
                   <Input value={form.employee_code} onChange={e => setForm(f => ({ ...f, employee_code: e.target.value }))} placeholder="EMP001" required className="mt-1" /></div>
                 <div><label className="text-xs font-medium text-gray-600">First Name*</label>
                   <Input value={form.first_name} onChange={e => setForm(f => ({ ...f, first_name: e.target.value }))} required className="mt-1" /></div>
-                <div><label className="text-xs font-medium text-gray-600">Last Name*</label>
-                  <Input value={form.last_name} onChange={e => setForm(f => ({ ...f, last_name: e.target.value }))} required className="mt-1" /></div>
+                <div><label className="text-xs font-medium text-gray-600">Last Name</label>
+                  <Input value={form.last_name} onChange={e => setForm(f => ({ ...f, last_name: e.target.value }))} className="mt-1" /></div>
                 <div><label className="text-xs font-medium text-gray-600">Email</label>
                   <Input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} className="mt-1" /></div>
                 <div><label className="text-xs font-medium text-gray-600">Phone</label>
@@ -323,7 +959,7 @@ function EmployeesSection({ departments }: { departments: Department[] }) {
                     <option value="">None</option>
                     {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                   </select></div>
-                <div><label className="text-xs font-medium text-gray-600">Job Title</label>
+                <div><label className="text-xs font-medium text-gray-600">Designation</label>
                   <Input value={form.job_title} onChange={e => setForm(f => ({ ...f, job_title: e.target.value }))} className="mt-1" /></div>
                 <div><label className="text-xs font-medium text-gray-600">Employment Type</label>
                   <select value={form.employment_type} onChange={e => setForm(f => ({ ...f, employment_type: e.target.value }))} className="mt-1 w-full border rounded-md px-3 py-2 text-sm">
@@ -344,61 +980,94 @@ function EmployeesSection({ departments }: { departments: Department[] }) {
         </Card>
       )}
 
-      <div className="flex gap-2">
-        <div className="relative flex-1">
+      {/* Filters */}
+      <div className="flex gap-3 flex-wrap bg-gray-50 border border-gray-200 rounded-xl px-4 py-3">
+        <div className="relative flex-1 min-w-[220px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <Input placeholder="Search by name, code or email…" value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
+          <Input placeholder="Search by name, code or designation…" value={search} onChange={e => setSearch(e.target.value)} className="pl-9 bg-white text-sm" />
         </div>
-        <select value={deptFilter} onChange={e => setDeptFilter(e.target.value)} className="border rounded-md px-3 py-2 text-sm min-w-[160px]">
+        <select value={deptFilter} onChange={e => setDeptFilter(e.target.value)} className="border rounded-lg px-3 py-2 text-sm bg-white min-w-[160px]">
           <option value="">All Departments</option>
           {departments.map(d => <option key={d.id} value={String(d.id)}>{d.name}</option>)}
         </select>
-        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="border rounded-md px-3 py-2 text-sm">
+        <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} className="border rounded-lg px-3 py-2 text-sm bg-white min-w-[130px]">
+          <option value="">All Types</option>
+          <option value="full_time">Full Time</option>
+          <option value="part_time">Part Time</option>
+          <option value="contract">Contract</option>
+          <option value="intern">Intern</option>
+        </select>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="border rounded-lg px-3 py-2 text-sm bg-white w-28">
           <option value="active">Active</option>
           <option value="inactive">Inactive</option>
-          <option value="terminated">Terminated</option>
           <option value="all">All Status</option>
         </select>
       </div>
 
-      <Card className="border-orange-100">
-        <div className="overflow-x-auto">
+      {/* Results count */}
+      <p className="text-xs text-gray-500">{visible.length} employee{visible.length !== 1 ? 's' : ''} shown</p>
+
+      {loading ? (
+        <div className="py-20 text-center text-gray-400">Loading employees…</div>
+      ) : visible.length === 0 ? (
+        <div className="py-20 text-center text-gray-400">No employees found</div>
+      ) : viewMode === 'grid' ? (
+        /* Grid view */
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {visible.map(emp => (
+            <EmployeeCard
+              key={emp.id}
+              emp={emp}
+              onView={() => setProfileEmp(emp)}
+              onEdit={() => openEdit(emp)}
+            />
+          ))}
+        </div>
+      ) : (
+        /* List view */
+        <div className="border border-gray-200 rounded-xl overflow-hidden">
           <table className="w-full text-sm">
-            <thead><tr className="border-b border-orange-100 bg-orange-50">
-              <th className="px-4 py-3 text-left font-medium text-gray-600">Code</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-600">Name</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-600">Department</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-600">Job Title</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-600">Type</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-600">Salary</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-600">Status</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-600">Actions</th>
+            <thead><tr className="bg-gray-50 border-b border-gray-200">
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">EMP ID</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">NAME</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">DEPARTMENT</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">DESIGNATION</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">TYPE</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">STATUS</th>
+              <th className="px-4 py-3" />
             </tr></thead>
             <tbody>
-              {loading ? (
-                <tr><td colSpan={8} className="py-12 text-center text-gray-400">Loading…</td></tr>
-              ) : employees.length === 0 ? (
-                <tr><td colSpan={8} className="py-12 text-center text-gray-400">No employees found</td></tr>
-              ) : employees.map(emp => (
-                <tr key={emp.id} className="border-b border-gray-50 hover:bg-orange-50/30">
-                  <td className="px-4 py-3 font-mono text-xs text-gray-500">{emp.employee_code}</td>
-                  <td className="px-4 py-3 font-medium text-gray-900">{emp.first_name} {emp.last_name}<div className="text-xs text-gray-400">{emp.email}</div></td>
-                  <td className="px-4 py-3 text-gray-600">{emp.department_name || '—'}</td>
-                  <td className="px-4 py-3 text-gray-600">{emp.job_title || '—'}</td>
+              {visible.map((emp, i) => (
+                <tr key={emp.id} className={`border-b border-gray-100 hover:bg-orange-50/30 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                  <td className="px-4 py-3 font-mono text-xs text-gray-500 font-semibold">{emp.employee_code}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-bold shrink-0 ${avatarColor(emp.first_name + emp.last_name)}`}>
+                        {avatarInitials(emp.first_name, emp.last_name)}
+                      </div>
+                      <div>
+                        <p className="font-semibold text-gray-900">{emp.first_name} {emp.last_name}</p>
+                        <p className="text-xs text-gray-400">{emp.email || emp.phone || ''}</p>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-gray-500 text-xs">{emp.department_name || '—'}</td>
+                  <td className="px-4 py-3 text-gray-600 text-xs">{emp.job_title || '—'}</td>
                   <td className="px-4 py-3"><StatusBadge status={emp.employment_type} /></td>
-                  <td className="px-4 py-3 text-gray-600">{fmt(emp.basic_salary)}</td>
                   <td className="px-4 py-3"><StatusBadge status={emp.status} /></td>
                   <td className="px-4 py-3">
-                    <Button size="sm" variant="ghost" onClick={() => openEdit(emp)} className="h-7 w-7 p-0 text-gray-400 hover:text-orange-600">
-                      <Edit2 className="w-3.5 h-3.5" />
-                    </Button>
+                    <div className="flex gap-1">
+                      <button onClick={() => setProfileEmp(emp)} className="text-xs text-orange-600 hover:text-orange-700 font-medium px-2 py-1 rounded hover:bg-orange-50">Profile</button>
+                      <button onClick={() => openEdit(emp)} className="text-gray-400 hover:text-orange-600 p-1 rounded hover:bg-gray-50"><Edit2 className="w-3.5 h-3.5" /></button>
+                    </div>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      </Card>
+      )}
+
     </div>
   )
 }
@@ -468,6 +1137,14 @@ function AttendanceSection() {
 
   useEffect(() => { load() }, [load])
 
+  // Auto-refresh every 30 seconds when viewing today
+  useEffect(() => {
+    const today = new Date().toISOString().slice(0, 10)
+    if (date !== today) return
+    const id = setInterval(load, 30000)
+    return () => clearInterval(id)
+  }, [date, load])
+
   // Reload mark map when date changes
   useEffect(() => {
     if (!date) return
@@ -517,9 +1194,18 @@ function AttendanceSection() {
       <div className="flex items-start justify-between">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Biometric Attendance</h2>
-          <p className="text-xs text-gray-400 mt-0.5">All times in IST · Last device push: {data ? new Date().toLocaleTimeString() : 'Never'}</p>
+          <p className="text-xs text-gray-400 mt-0.5">
+            All times in IST
+            {date === new Date().toISOString().slice(0,10) && <span className="ml-2 text-green-600">● Live – auto-refreshes every 30s</span>}
+          </p>
         </div>
         <div className="flex gap-2">
+          {view === 'list' && (
+            <Button variant="outline" size="sm" onClick={load} disabled={loading} className="border-gray-200 text-gray-600">
+              <svg className={`w-3.5 h-3.5 mr-1 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+              Refresh
+            </Button>
+          )}
           {view !== 'list' && (
             <Button variant="outline" size="sm" onClick={() => setView('list')} className="border-gray-200 text-gray-600">
               ← Back
@@ -599,32 +1285,35 @@ function AttendanceSection() {
                   <tr className="bg-gray-50 border-b border-gray-200">
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 w-20">EMP ID</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">NAME</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">DEPARTMENT</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 text-green-600">CHECK IN</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-red-500">CHECK OUT</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">WORK HRS</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-blue-600">OT</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">DEPT</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-green-600">IN</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-yellow-600">LUNCH OUT</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-yellow-600">LUNCH IN</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-red-500">OUT</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">HRS</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">PUNCHES</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">STATUS</th>
                   </tr>
                 </thead>
                 <tbody>
                   {loading ? (
-                    <tr><td colSpan={8} className="py-16 text-center text-gray-400">Loading…</td></tr>
+                    <tr><td colSpan={10} className="py-16 text-center text-gray-400">Loading…</td></tr>
                   ) : employees.length === 0 ? (
-                    <tr><td colSpan={8} className="py-16 text-center text-gray-400">No records for {date}</td></tr>
+                    <tr><td colSpan={10} className="py-16 text-center text-gray-400">No records for {date}</td></tr>
                   ) : employees.map((emp: any, i: number) => {
                     const wh = Number(emp.work_hours) || 0
-                    const ot = wh > 9 ? wh - 9 : 0
                     const badge = emp.status ? STATUS_BADGE[emp.status] : STATUS_BADGE['absent']
                     return (
                       <tr key={emp.id} className={`border-b border-gray-100 hover:bg-orange-50/30 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
                         <td className="px-4 py-3 font-mono text-xs text-gray-500 font-semibold">{emp.employee_code}</td>
                         <td className="px-4 py-3 font-semibold text-gray-900">{emp.name}</td>
                         <td className="px-4 py-3 text-gray-500 text-xs">{emp.department_name || '—'}</td>
-                        <td className="px-4 py-3 font-semibold text-green-600">{fmtTime(emp.check_in)}</td>
-                        <td className="px-4 py-3 font-semibold text-red-500">{fmtTime(emp.check_out)}</td>
-                        <td className="px-4 py-3 text-gray-700 font-mono text-xs">{fmtWH(wh)}</td>
-                        <td className="px-4 py-3 font-mono text-xs text-blue-600">{ot > 0 ? fmtWH(ot) : <span className="text-gray-300">—</span>}</td>
+                        <td className="px-4 py-3 font-semibold text-green-600 font-mono text-xs">{fmtTime(emp.check_in)}</td>
+                        <td className="px-4 py-3 font-mono text-xs text-yellow-600">{fmtTime(emp.lunch_out)}</td>
+                        <td className="px-4 py-3 font-mono text-xs text-yellow-600">{fmtTime(emp.lunch_in)}</td>
+                        <td className="px-4 py-3 font-semibold text-red-500 font-mono text-xs">{fmtTime(emp.check_out)}</td>
+                        <td className="px-4 py-3 text-gray-700 font-mono text-xs">{wh > 0 ? fmtWH(wh) : <span className="text-gray-300">—</span>}</td>
+                        <td className="px-4 py-3 text-center text-xs font-mono text-gray-500">{emp.punch_count ?? '—'}</td>
                         <td className="px-4 py-3">
                           {badge ? (
                             <span className={`inline-block px-2.5 py-1 rounded-full text-xs font-semibold border ${badge.cls}`}>{badge.label}</span>
@@ -1075,28 +1764,60 @@ function PayrollSection() {
 // ─── Departments ──────────────────────────────────────────────────────────────
 
 function DepartmentsSection({ departments, reload }: { departments: Department[]; reload: () => void }) {
-  const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState({ name: '', code: '', description: '' })
-  const [saving, setSaving] = useState(false)
-  const [msg, setMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+  const blankForm = { name: '', code: '', description: '' }
+  const [showForm, setShowForm]   = useState(false)
+  const [editDept, setEditDept]   = useState<Department | null>(null)
+  const [form, setForm]           = useState(blankForm)
+  const [saving, setSaving]       = useState(false)
+  const [deleting, setDeleting]   = useState<number | null>(null)
+  const [msg, setMsg]             = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+
+  const openEdit = (d: Department) => {
+    setEditDept(d)
+    setForm({ name: d.name, code: d.code, description: d.description || '' })
+    setShowForm(true)
+  }
+
+  const openAdd = () => {
+    setEditDept(null)
+    setForm(blankForm)
+    setShowForm(true)
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault(); setSaving(true); setMsg(null)
     try {
-      const res = await fetch('/api/hr/departments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
+      const url    = editDept ? `/api/hr/departments/${editDept.id}` : '/api/hr/departments'
+      const method = editDept ? 'PUT' : 'POST'
+      const res  = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
-      setMsg({ text: 'Department created.', type: 'success' })
-      setForm({ name: '', code: '', description: '' }); setShowForm(false); reload()
+      setMsg({ text: editDept ? 'Department updated.' : 'Department created.', type: 'success' })
+      setShowForm(false); setEditDept(null); setForm(blankForm); reload()
     } catch (err: any) { setMsg({ text: err.message, type: 'error' }) }
     finally { setSaving(false) }
+  }
+
+  const handleDelete = async (d: Department) => {
+    if (!confirm(`Delete "${d.name}"? This cannot be undone.`)) return
+    setDeleting(d.id)
+    try {
+      const res  = await fetch(`/api/hr/departments/${d.id}`, { method: 'DELETE' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setMsg({ text: 'Department deleted.', type: 'success' }); reload()
+    } catch (err: any) { setMsg({ text: err.message, type: 'error' }) }
+    finally { setDeleting(null) }
   }
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <div><h2 className="text-xl font-bold text-gray-900">Departments</h2><p className="text-sm text-gray-500">{departments.length} departments</p></div>
-        <Button onClick={() => setShowForm(s => !s)} className="bg-orange-600 hover:bg-orange-700 text-white">
+        <div>
+          <h2 className="text-xl font-bold text-gray-900">Departments</h2>
+          <p className="text-sm text-gray-500">{departments.length} departments</p>
+        </div>
+        <Button onClick={openAdd} className="bg-orange-600 hover:bg-orange-700 text-white">
           <Plus className="w-4 h-4 mr-2" />Add Department
         </Button>
       </div>
@@ -1105,17 +1826,28 @@ function DepartmentsSection({ departments, reload }: { departments: Department[]
 
       {showForm && (
         <Card className="border-orange-200">
-          <CardHeader className="pb-3"><CardTitle className="text-base">New Department</CardTitle></CardHeader>
+          <CardHeader className="pb-3 flex flex-row items-center justify-between">
+            <CardTitle className="text-base">{editDept ? `Edit — ${editDept.name}` : 'New Department'}</CardTitle>
+            <button onClick={() => { setShowForm(false); setEditDept(null) }} className="text-gray-400 hover:text-gray-600 text-lg leading-none">✕</button>
+          </CardHeader>
           <CardContent>
-            <form onSubmit={handleSubmit} className="flex gap-3 items-end">
-              <div className="flex-1"><label className="text-xs font-medium text-gray-600">Department Name*</label>
-                <Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required className="mt-1" /></div>
-              <div><label className="text-xs font-medium text-gray-600">Code*</label>
-                <Input value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value.toUpperCase() }))} required maxLength={20} className="mt-1 w-28" placeholder="HR" /></div>
-              <div className="flex-1"><label className="text-xs font-medium text-gray-600">Description</label>
-                <Input value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} className="mt-1" /></div>
-              <Button type="submit" disabled={saving} className="bg-orange-600 hover:bg-orange-700 text-white">{saving ? 'Creating…' : 'Create'}</Button>
-              <Button type="button" variant="outline" onClick={() => setShowForm(false)}>Cancel</Button>
+            <form onSubmit={handleSubmit} className="flex gap-3 items-end flex-wrap">
+              <div className="flex-1 min-w-[180px]">
+                <label className="text-xs font-medium text-gray-600">Department Name*</label>
+                <Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required className="mt-1" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600">Code*</label>
+                <Input value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value.toUpperCase() }))} required maxLength={20} className="mt-1 w-28" placeholder="HR" />
+              </div>
+              <div className="flex-1 min-w-[180px]">
+                <label className="text-xs font-medium text-gray-600">Description</label>
+                <Input value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} className="mt-1" placeholder="Optional" />
+              </div>
+              <Button type="submit" disabled={saving} className="bg-orange-600 hover:bg-orange-700 text-white">
+                {saving ? 'Saving…' : editDept ? 'Update' : 'Create'}
+              </Button>
+              <Button type="button" variant="outline" onClick={() => { setShowForm(false); setEditDept(null) }}>Cancel</Button>
             </form>
           </CardContent>
         </Card>
@@ -1125,16 +1857,34 @@ function DepartmentsSection({ departments, reload }: { departments: Department[]
         {departments.length === 0 ? (
           <div className="col-span-3 py-12 text-center text-gray-400">No departments yet. Add one above.</div>
         ) : departments.map(d => (
-          <Card key={d.id} className="border-orange-100 hover:border-orange-300 transition-colors">
+          <Card key={d.id} className="border-orange-100 hover:border-orange-300 transition-colors group">
             <CardContent className="p-5">
               <div className="flex items-start justify-between mb-3">
                 <div className="bg-orange-100 text-orange-700 font-bold text-xs px-2 py-1 rounded">{d.code}</div>
-                <span className="text-2xl font-bold text-orange-600">{d.employee_count}</span>
+                <div className="flex items-center gap-2">
+                  {/* Edit + Delete — always visible */}
+                  <button
+                    onClick={() => openEdit(d)}
+                    className="p-1 rounded text-gray-400 hover:text-orange-600 hover:bg-orange-50 transition-colors"
+                    title="Edit department"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(d)}
+                    disabled={deleting === d.id}
+                    className="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50"
+                    title="Delete department"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                  </button>
+                  <span className="text-2xl font-bold text-orange-600 ml-1">{d.employee_count}</span>
+                </div>
               </div>
               <h3 className="font-semibold text-gray-900">{d.name}</h3>
-              {d.description && <p className="text-xs text-gray-400 mt-1">{d.description}</p>}
-              {d.head_name && <p className="text-xs text-gray-500 mt-2">Head: <span className="font-medium">{d.head_name}</span></p>}
-              <p className="text-xs text-gray-400 mt-1">{d.employee_count} active employee{d.employee_count !== 1 ? 's' : ''}</p>
+              {d.description && <p className="text-xs text-orange-400 mt-0.5">{d.description}</p>}
+              <p className="text-xs text-gray-500 mt-2">Head: <span className="font-medium">{d.head_name || '—'}</span></p>
+              <p className="text-xs text-gray-400 mt-0.5">{d.employee_count} active employee{d.employee_count !== 1 ? 's' : ''}</p>
             </CardContent>
           </Card>
         ))}

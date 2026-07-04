@@ -17,7 +17,9 @@ export async function GET(req: Request) {
         e.id, e.employee_code,
         CONCAT(e.first_name, ' ', COALESCE(e.last_name,'')) AS name,
         d.name AS department_name,
-        a.check_in, a.check_out, a.status, a.notes,
+        a.check_in, a.check_out, a.lunch_out, a.lunch_in,
+        a.punch_count, a.late_morning_mins, a.is_late_lunch, a.late_lunch_mins,
+        a.status, a.notes,
         CASE
           WHEN a.check_in IS NOT NULL AND a.check_out IS NOT NULL
           THEN ROUND(CAST(EXTRACT(EPOCH FROM (a.check_out - a.check_in)) / 3600.0 AS numeric), 2)

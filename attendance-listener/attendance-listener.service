@@ -1,0 +1,28 @@
+[Unit]
+Description=ESSL K30 Pro ADMS Attendance Listener
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/attendance-listener
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=5
+
+# Environment variables
+Environment=PORT=8080
+Environment=DEVICE_PREFIX=BT
+Environment=SHIFT_START=09:00
+Environment=GRACE_MINS=10
+Environment=DB_HOST=localhost
+Environment=DB_PORT=5432
+Environment=DB_NAME=mattress_erp
+Environment=DB_USER=postgres
+Environment=DB_PASSWORD=Mind56%^
+
+StandardOutput=append:/var/log/attendance-listener.log
+StandardError=append:/var/log/attendance-listener.log
+
+[Install]
+WantedBy=multi-user.target

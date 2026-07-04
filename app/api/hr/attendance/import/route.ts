@@ -95,7 +95,13 @@ async function parseZKTeco(wb: XLSX.WorkBook): Promise<NextResponse> {
     const rawCode = String(row[2] ?? '').trim()
     const rawName = String(row[10] ?? '').trim()
 
-    let emp: any = byCode.get(rawCode.toLowerCase()) ?? null
+    // Strip device prefix (e.g. "BT-05" → "05") for matching against employee_code
+    const strippedCode = rawCode.replace(/^[A-Za-z]+-/i, '')
+
+    let emp: any = byCode.get(rawCode.toLowerCase())
+      ?? byCode.get(strippedCode.toLowerCase())
+      ?? byCode.get(String(parseInt(strippedCode, 10)))  // "05" → "5" fallback
+      ?? null
     if (!emp) {
       const normalised = rawName.replace(/~/g, ' ').replace(/\s+/g, ' ').toLowerCase().trim()
       emp = byName.get(normalised) ?? null

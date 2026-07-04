@@ -4,31 +4,35 @@ import { z } from 'zod'
 import { getDb } from '@/lib/db'
 
 const schema = z.object({
-  employee_code: z.string().min(1),
-  first_name: z.string().min(1),
-  last_name: z.string().min(1),
-  email: z.string().email().optional().nullable(),
-  phone: z.string().optional().nullable(),
-  gender: z.enum(['male', 'female', 'other']).optional().nullable(),
-  date_of_birth: z.string().optional().nullable(),
-  date_of_joining: z.string().min(1),
-  department_id: z.coerce.number().int().optional().nullable(),
-  job_title: z.string().optional().nullable(),
-  employment_type: z.enum(['full_time', 'part_time', 'contract', 'intern']).default('full_time'),
-  basic_salary: z.coerce.number().min(0).default(0),
-  bank_account: z.string().optional().nullable(),
-  bank_name: z.string().optional().nullable(),
-  address: z.string().optional().nullable(),
+  employee_code:     z.string().min(1),
+  first_name:        z.string().min(1),
+  last_name:         z.string().optional().nullable(),
+  email:             z.string().email().optional().nullable(),
+  phone:             z.string().optional().nullable(),
+  gender:            z.enum(['male', 'female', 'other']).optional().nullable(),
+  date_of_birth:     z.string().optional().nullable(),
+  date_of_joining:   z.string().min(1),
+  department_id:     z.coerce.number().int().optional().nullable(),
+  job_title:         z.string().optional().nullable(),
+  employment_type:   z.enum(['full_time', 'part_time', 'contract', 'intern']).default('full_time'),
+  basic_salary:      z.coerce.number().min(0).default(0),
+  bank_account:      z.string().optional().nullable(),
+  bank_name:         z.string().optional().nullable(),
+  address:           z.string().optional().nullable(),
   emergency_contact: z.string().optional().nullable(),
-  emergency_phone: z.string().optional().nullable(),
+  emergency_phone:   z.string().optional().nullable(),
+  father_name:       z.string().optional().nullable(),
+  blood_group:       z.string().optional().nullable(),
+  contribution_type: z.string().optional().nullable(),
 })
 
 const SELECT_COLS = `
   e.id, e.employee_code, e.first_name, e.last_name, e.email, e.phone,
   e.gender, e.date_of_birth, e.date_of_joining, e.department_id,
   e.job_title, e.employment_type, e.basic_salary, e.bank_account, e.bank_name,
-  e.address, e.emergency_contact, e.emergency_phone, e.status,
-  e.created_at, e.updated_at,
+  e.address, e.emergency_contact, e.emergency_phone,
+  e.father_name, e.blood_group, e.contribution_type,
+  e.status, e.created_at, e.updated_at,
   d.name AS department_name`
 
 export async function GET(req: Request) {
@@ -70,19 +74,26 @@ export async function POST(req: Request) {
          employee_code, first_name, last_name, email, phone, gender,
          date_of_birth, date_of_joining, department_id, job_title,
          employment_type, basic_salary, bank_account, bank_name,
-         address, emergency_contact, emergency_phone
+         address, emergency_contact, emergency_phone,
+         father_name, blood_group, contribution_type
        ) VALUES (
          :employee_code, :first_name, :last_name, :email, :phone, :gender,
          :date_of_birth, :date_of_joining, :department_id, :job_title,
          :employment_type, :basic_salary, :bank_account, :bank_name,
-         :address, :emergency_contact, :emergency_phone
+         :address, :emergency_contact, :emergency_phone,
+         :father_name, :blood_group, :contribution_type
        )`,
-      { ...parsed, email: parsed.email ?? null, phone: parsed.phone ?? null,
+      { ...parsed,
+        last_name: parsed.last_name ?? null,
+        email: parsed.email ?? null, phone: parsed.phone ?? null,
         gender: parsed.gender ?? null, date_of_birth: parsed.date_of_birth ?? null,
         department_id: parsed.department_id ?? null, job_title: parsed.job_title ?? null,
         bank_account: parsed.bank_account ?? null, bank_name: parsed.bank_name ?? null,
         address: parsed.address ?? null, emergency_contact: parsed.emergency_contact ?? null,
-        emergency_phone: parsed.emergency_phone ?? null }
+        emergency_phone: parsed.emergency_phone ?? null,
+        father_name: parsed.father_name ?? null,
+        blood_group: parsed.blood_group ?? null,
+        contribution_type: parsed.contribution_type ?? null }
     )
     const [rows] = await db.query(
       `SELECT ${SELECT_COLS} FROM hr_employees e LEFT JOIN hr_departments d ON d.id = e.department_id WHERE e.id = :id`,

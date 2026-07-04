@@ -1,0 +1,1 @@
+ALTER TABLE hr_employees ALTER COLUMN last_name DROP NOT NULL;
