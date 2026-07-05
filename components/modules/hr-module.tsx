@@ -1109,6 +1109,13 @@ function AttendanceSection() {
   const [departments, setDepts] = useState<Department[]>([])
   const [view, setView]         = useState<'list' | 'import' | 'mark'>('list')
   const [msg, setMsg]           = useState<{ text: string; type: 'success'|'error' } | null>(null)
+  const [sortCol, setSortCol]   = useState<'employee_code' | 'name' | null>(null)
+  const [sortDir, setSortDir]   = useState<'asc' | 'desc'>('asc')
+
+  const handleSort = (col: 'employee_code' | 'name') => {
+    if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setSortCol(col); setSortDir('asc') }
+  }
 
   // Import state
   const [importFile, setImportFile]   = useState<File | null>(null)
@@ -1184,7 +1191,15 @@ function AttendanceSection() {
   }
 
   const summary = data?.summary || {}
-  const employees = data?.employees || []
+  const rawEmployees: any[] = data?.employees || []
+  const employees = sortCol
+    ? [...rawEmployees].sort((a, b) => {
+        const av = (a[sortCol] || '').toString().toLowerCase()
+        const bv = (b[sortCol] || '').toString().toLowerCase()
+        const cmp = av < bv ? -1 : av > bv ? 1 : 0
+        return sortDir === 'asc' ? cmp : -cmp
+      })
+    : rawEmployees
 
   const reportMonth = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`
 
@@ -1283,8 +1298,24 @@ function AttendanceSection() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-gray-50 border-b border-gray-200">
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 w-20">EMP ID</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">NAME</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 w-20">
+                      <button type="button" onClick={() => handleSort('employee_code')} className="inline-flex items-center gap-1 hover:text-orange-600 transition-colors group">
+                        EMP ID
+                        <span className="flex flex-col leading-none">
+                          <svg className={`w-2.5 h-2.5 ${sortCol === 'employee_code' && sortDir === 'asc' ? 'text-orange-600' : 'text-gray-300 group-hover:text-gray-400'}`} viewBox="0 0 10 6" fill="currentColor"><path d="M5 0L10 6H0z"/></svg>
+                          <svg className={`w-2.5 h-2.5 ${sortCol === 'employee_code' && sortDir === 'desc' ? 'text-orange-600' : 'text-gray-300 group-hover:text-gray-400'}`} viewBox="0 0 10 6" fill="currentColor"><path d="M5 6L0 0h10z"/></svg>
+                        </span>
+                      </button>
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
+                      <button type="button" onClick={() => handleSort('name')} className="inline-flex items-center gap-1 hover:text-orange-600 transition-colors group">
+                        NAME
+                        <span className="flex flex-col leading-none">
+                          <svg className={`w-2.5 h-2.5 ${sortCol === 'name' && sortDir === 'asc' ? 'text-orange-600' : 'text-gray-300 group-hover:text-gray-400'}`} viewBox="0 0 10 6" fill="currentColor"><path d="M5 0L10 6H0z"/></svg>
+                          <svg className={`w-2.5 h-2.5 ${sortCol === 'name' && sortDir === 'desc' ? 'text-orange-600' : 'text-gray-300 group-hover:text-gray-400'}`} viewBox="0 0 10 6" fill="currentColor"><path d="M5 6L0 0h10z"/></svg>
+                        </span>
+                      </button>
+                    </th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">DEPT</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-green-600">IN</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-yellow-600">LUNCH OUT</th>

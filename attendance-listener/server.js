@@ -154,8 +154,7 @@ async function handleAttlog(req, res, sn) {
       var timeStr  = datetime.slice(spIdx + 1)
       if (!dateStr || !timeStr) continue
 
-      var btNum   = parseInt(pin, 10) - 4
-      var empCode = DEVICE_PREFIX + '-' + String(btNum).padStart(2, '0')
+      var empCode = DEVICE_PREFIX + '-' + pin.padStart(2, '0')
       var empRes  = await pool.query(
         'SELECT id FROM hr_employees WHERE employee_code=$1 OR employee_code=$2 OR employee_code=$3 LIMIT 1',
         [empCode, pin.padStart(2,'0'), pin]

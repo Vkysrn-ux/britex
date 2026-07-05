@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  britex-erp:
+    container_name: britex-erp
+    build: .
+    restart: always
+    env_file:
+      - .env.local
+    networks:
+      - common-net
+      - postgress_default
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=common-net"
+
+      - "traefik.http.routers.britex-erp.rule=Host(`erp.britexcbe.com`)"
+      - "traefik.http.routers.britex-erp.entrypoints=websecure"
+      - "traefik.http.routers.britex-erp.tls=true"
+      - "traefik.http.routers.britex-erp.tls.certresolver=letsencrypt"
+
+      - "traefik.http.services.britex-erp.loadbalancer.server.port=3000"
+
+networks:
+  common-net:
+    external: true
+  postgress_default:
+    external: true
