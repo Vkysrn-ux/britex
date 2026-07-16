@@ -8,12 +8,13 @@ const schema = z.object({
   rejection_note: z.string().optional().nullable(),
 })
 
-type Ctx = { params: { id: string } }
+type Ctx = { params: Promise<{ id: string }> }
 
 export async function POST(req: Request, { params }: Ctx) {
   try {
     const { action, rejection_note } = schema.parse(await req.json())
     const db = getDb()
+    const requestId = Number((await params).id)
     const status = action === 'approve' ? 'approved' : 'rejected'
 
     await db.execute(
@@ -22,13 +23,13 @@ export async function POST(req: Request, { params }: Ctx) {
               approved_at = NOW(),
               rejection_note = :note
         WHERE id = :id AND status = 'pending'`,
-      { status, note: rejection_note ?? null, id: Number(params.id) }
+      { status, note: rejection_note ?? null, id: requestId }
     )
 
     if (action === 'approve') {
       const [rows] = await db.query(
         `SELECT employee_id, start_date, end_date FROM hr_leave_requests WHERE id = :id`,
-        { id: Number(params.id) }
+        { id: requestId }
       )
       const req_row = (rows as any[])[0]
       if (req_row) {

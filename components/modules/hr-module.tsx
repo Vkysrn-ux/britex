@@ -549,6 +549,16 @@ function EmployeePayrollTab({ emp, onEmpUpdate }: { emp: any; onEmpUpdate: (e: a
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
 
+  // Load fresh salary settings (directory list rows don't carry day_rate/esi_amount)
+  useEffect(() => {
+    fetch(`/api/hr/employees/${emp.id}`).then(r => r.json()).then(d => {
+      if (d.data) {
+        setDayRate(String(Number(d.data.day_rate) || 0))
+        setEsiAmount(String(Number(d.data.esi_amount) || 0))
+      }
+    })
+  }, [emp.id])
+
   // Load this month's inputs + payroll history
   useEffect(() => {
     fetch(`/api/hr/payroll/inputs?month=${month}&year=${year}`).then(r => r.json()).then(d => {

@@ -28,7 +28,7 @@ const updateSchema = z.object({
   status:            z.enum(['active', 'inactive', 'terminated']).optional(),
 })
 
-type Ctx = { params: { id: string } }
+type Ctx = { params: Promise<{ id: string }> }
 
 export async function GET(_req: Request, { params }: Ctx) {
   try {
@@ -37,7 +37,7 @@ export async function GET(_req: Request, { params }: Ctx) {
       `SELECT e.*, d.name AS department_name
          FROM hr_employees e LEFT JOIN hr_departments d ON d.id = e.department_id
          WHERE e.id = :id`,
-      { id: Number(params.id) }
+      { id: Number((await params).id) }
     )
     const emp = (rows as any[])[0]
     if (!emp) return NextResponse.json({ error: 'Employee not found' }, { status: 404 })
@@ -51,12 +51,13 @@ export async function PUT(req: Request, { params }: Ctx) {
   try {
     const parsed = updateSchema.parse(await req.json())
     const db = getDb()
+    const id = Number((await params).id)
     const sets = Object.keys(parsed).map(k => `${k} = :${k}`).join(', ')
     if (!sets) return NextResponse.json({ error: 'No fields to update' }, { status: 400 })
-    await db.execute(`UPDATE hr_employees SET ${sets} WHERE id = :id`, { ...parsed, id: Number(params.id) })
+    await db.execute(`UPDATE hr_employees SET ${sets} WHERE id = :id`, { ...parsed, id })
     const [rows] = await db.query(
       `SELECT e.*, d.name AS department_name FROM hr_employees e LEFT JOIN hr_departments d ON d.id = e.department_id WHERE e.id = :id`,
-      { id: Number(params.id) }
+      { id }
     )
     return NextResponse.json({ data: (rows as any[])[0] })
   } catch (err: any) {
@@ -68,7 +69,7 @@ export async function PUT(req: Request, { params }: Ctx) {
 export async function DELETE(_req: Request, { params }: Ctx) {
   try {
     const db = getDb()
-    await db.execute(`UPDATE hr_employees SET status = 'terminated' WHERE id = :id`, { id: Number(params.id) })
+    await db.execute(`UPDATE hr_employees SET status = 'terminated' WHERE id = :id`, { id: Number((await params).id) })
     return NextResponse.json({ success: true })
   } catch (err: any) {
     return NextResponse.json({ error: 'Failed to terminate employee' }, { status: 500 })
