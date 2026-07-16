@@ -36,7 +36,7 @@ export async function POST(_req: Request, { params }: Ctx) {
       `SELECT e.id, e.employee_code, COALESCE(e.day_rate, 0) AS day_rate,
               COALESCE(i.advance, 0) AS advance,
               COALESCE(i.permission_hours, 0) AS permission_hours,
-              COALESCE(i.esi, 0) AS esi
+              CASE WHEN COALESCE(i.esi, 0) > 0 THEN i.esi ELSE COALESCE(e.esi_amount, 0) END AS esi
          FROM hr_employees e
          LEFT JOIN hr_payroll_inputs i
            ON i.employee_id = e.id AND i.month = :month AND i.year = :year

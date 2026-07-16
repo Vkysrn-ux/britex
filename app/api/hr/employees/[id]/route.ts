@@ -15,6 +15,8 @@ const updateSchema = z.object({
   job_title:         z.string().optional().nullable(),
   employment_type:   z.enum(['full_time', 'part_time', 'contract', 'intern']).optional(),
   basic_salary:      z.coerce.number().min(0).optional(),
+  day_rate:          z.coerce.number().min(0).optional(),
+  esi_amount:        z.coerce.number().min(0).optional(),
   bank_account:      z.string().optional().nullable(),
   bank_name:         z.string().optional().nullable(),
   address:           z.string().optional().nullable(),

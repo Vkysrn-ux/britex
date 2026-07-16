@@ -521,14 +521,180 @@ function EmployeeProfilePage({
         </div>
       )}
 
+      {/* ── PAYROLL TAB ── */}
+      {tab === 'payroll' && <EmployeePayrollTab emp={emp} onEmpUpdate={setEmp} />}
+
       {/* ── OTHER TABS — PLACEHOLDERS ── */}
-      {(tab === 'education' || tab === 'documents' || tab === 'payroll') && (
+      {(tab === 'education' || tab === 'documents') && (
         <div className="bg-white border border-gray-200 rounded-2xl p-12 text-center text-gray-400">
-          <p className="text-4xl mb-3">{tab === 'education' ? '🎓' : tab === 'documents' ? '📄' : '💰'}</p>
+          <p className="text-4xl mb-3">{tab === 'education' ? '🎓' : '📄'}</p>
           <p className="font-semibold text-gray-600">{tab.charAt(0).toUpperCase() + tab.slice(1)} section coming soon</p>
           <p className="text-sm mt-1">This section will be available in a future update.</p>
         </div>
       )}
+    </div>
+  )
+}
+
+function EmployeePayrollTab({ emp, onEmpUpdate }: { emp: any; onEmpUpdate: (e: any) => void }) {
+  const today = new Date()
+  const [dayRate, setDayRate] = useState(String(emp.day_rate ?? 0))
+  const [esiAmount, setEsiAmount] = useState(String(emp.esi_amount ?? 0))
+  const [month, setMonth] = useState(today.getMonth() + 1)
+  const [year, setYear] = useState(today.getFullYear())
+  const [advance, setAdvance] = useState('0')
+  const [permHours, setPermHours] = useState('0')
+  const [esiOverride, setEsiOverride] = useState('0')
+  const [history, setHistory] = useState<any[]>([])
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+
+  // Load this month's inputs + payroll history
+  useEffect(() => {
+    fetch(`/api/hr/payroll/inputs?month=${month}&year=${year}`).then(r => r.json()).then(d => {
+      const row = (d.data || []).find((r: any) => Number(r.employee_id) === Number(emp.id))
+      setAdvance(String(Number(row?.advance) || 0))
+      setPermHours(String(Number(row?.permission_hours) || 0))
+      setEsiOverride(String(Number(row?.esi) || 0))
+    })
+  }, [month, year, emp.id])
+  useEffect(() => {
+    fetch(`/api/hr/payroll/history?employee_id=${emp.id}`).then(r => r.json()).then(d => setHistory(d.data || []))
+  }, [emp.id])
+
+  const saveSettings = async () => {
+    setSaving(true); setMsg(null)
+    try {
+      const res = await fetch(`/api/hr/employees/${emp.id}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ day_rate: Number(dayRate) || 0, esi_amount: Number(esiAmount) || 0 }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      onEmpUpdate(data.data)
+      setMsg({ text: 'Salary settings saved. They apply automatically from the next salary calculation.', type: 'success' })
+    } catch (err: any) { setMsg({ text: err.message, type: 'error' }) }
+    finally { setSaving(false) }
+  }
+
+  const saveMonthInputs = async () => {
+    setSaving(true); setMsg(null)
+    try {
+      const res = await fetch('/api/hr/payroll/inputs', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ month, year, entries: [{
+          employee_id: emp.id, advance: Number(advance) || 0,
+          permission_hours: Number(permHours) || 0, esi: Number(esiOverride) || 0,
+        }] }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setMsg({ text: `Saved for ${MONTHS[month-1]} ${year}. Regenerate that month's payroll to apply.`, type: 'success' })
+    } catch (err: any) { setMsg({ text: err.message, type: 'error' }) }
+    finally { setSaving(false) }
+  }
+
+  const hourRate = (Number(dayRate) || 0) / 8
+
+  return (
+    <div className="space-y-4">
+      {msg && <div className={`p-3 rounded-lg text-sm ${msg.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>{msg.text}</div>}
+
+      <div className="grid grid-cols-2 gap-4">
+        {/* Standing salary settings */}
+        <div className="bg-white border border-gray-200 rounded-2xl p-6 space-y-4">
+          <h3 className="font-semibold text-gray-900">Salary Settings</h3>
+          <div>
+            <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 block">Per Day Salary (₹)</label>
+            <Input type="number" min="0" value={dayRate} onChange={e => setDayRate(e.target.value)} />
+            <p className="text-xs text-gray-400 mt-1">1 hour = ₹{hourRate.toFixed(2)} (day ÷ 8) — used for permission deduction</p>
+          </div>
+          <div>
+            <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 block">ESI per month (₹)</label>
+            <Input type="number" min="0" value={esiAmount} onChange={e => setEsiAmount(e.target.value)} />
+            <p className="text-xs text-gray-400 mt-1">Deducted every month automatically. 0 = no ESI.</p>
+          </div>
+          <Button onClick={saveSettings} disabled={saving} className="bg-orange-600 hover:bg-orange-700 text-white">
+            {saving ? 'Saving…' : 'Save Settings'}
+          </Button>
+        </div>
+
+        {/* This month's extras */}
+        <div className="bg-white border border-gray-200 rounded-2xl p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="font-semibold text-gray-900">Monthly Extras</h3>
+            <div className="flex gap-2">
+              <select value={month} onChange={e => setMonth(Number(e.target.value))} className="border rounded-md px-2 py-1 text-sm">
+                {MONTHS.map((m, i) => <option key={i} value={i+1}>{m}</option>)}
+              </select>
+              <Input type="number" value={year} onChange={e => setYear(Number(e.target.value))} className="w-20 h-8 text-sm" />
+            </div>
+          </div>
+          <div>
+            <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 block">Advance Given (₹)</label>
+            <Input type="number" min="0" value={advance} onChange={e => setAdvance(e.target.value)} />
+          </div>
+          <div>
+            <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 block">Permission (hours)</label>
+            <Input type="number" min="0" step="0.5" value={permHours} onChange={e => setPermHours(e.target.value)} />
+            <p className="text-xs text-gray-400 mt-1">Deduction: {permHours || 0} × ₹{hourRate.toFixed(2)} = ₹{((Number(permHours) || 0) * hourRate).toFixed(2)}</p>
+          </div>
+          <div>
+            <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 block">ESI override for this month (₹, 0 = use default)</label>
+            <Input type="number" min="0" value={esiOverride} onChange={e => setEsiOverride(e.target.value)} />
+          </div>
+          <Button onClick={saveMonthInputs} disabled={saving} className="bg-blue-600 hover:bg-blue-700 text-white">
+            {saving ? 'Saving…' : `Save for ${MONTHS[month-1]}`}
+          </Button>
+        </div>
+      </div>
+
+      {/* Salary history */}
+      <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100"><h3 className="font-semibold text-gray-900">Salary History</h3></div>
+        {history.length === 0 ? (
+          <div className="py-10 text-center text-gray-400 text-sm">No salary generated yet for this employee</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-orange-50 border-b border-orange-100">
+                  <th className="px-3 py-2 text-left font-semibold text-gray-600">Month</th>
+                  <th className="px-3 py-2 text-right font-semibold text-gray-600">Rate</th>
+                  <th className="px-3 py-2 text-center font-semibold text-green-700">Present</th>
+                  <th className="px-3 py-2 text-center font-semibold text-yellow-700">Half</th>
+                  <th className="px-3 py-2 text-center font-semibold text-orange-500">Sun</th>
+                  <th className="px-3 py-2 text-right font-semibold text-gray-600">Working ₹</th>
+                  <th className="px-3 py-2 text-right font-semibold text-green-700">Incentive</th>
+                  <th className="px-3 py-2 text-right font-semibold text-red-500">ESI</th>
+                  <th className="px-3 py-2 text-right font-semibold text-red-500">Advance</th>
+                  <th className="px-3 py-2 text-right font-semibold text-red-500">Permission</th>
+                  <th className="px-3 py-2 text-right font-semibold text-gray-900">Net</th>
+                  <th className="px-3 py-2 text-center font-semibold text-gray-600">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map((h, i) => (
+                  <tr key={i} className={`border-b border-gray-50 ${i % 2 ? 'bg-gray-50/40' : ''}`}>
+                    <td className="px-3 py-2 font-medium text-gray-900">{MONTHS[h.month-1]} {h.year}</td>
+                    <td className="px-3 py-2 text-right font-mono">{Number(h.day_rate)}</td>
+                    <td className="px-3 py-2 text-center text-green-700 font-semibold">{h.present_days}/{h.working_days}</td>
+                    <td className="px-3 py-2 text-center">{Number(h.half_days) || '—'}</td>
+                    <td className="px-3 py-2 text-center">{Number(h.sunday_days) || '—'}</td>
+                    <td className="px-3 py-2 text-right font-mono">{fmt(h.working_salary)}</td>
+                    <td className="px-3 py-2 text-right font-mono text-green-700">{Number(h.incentive) ? fmt(h.incentive) : '—'}</td>
+                    <td className="px-3 py-2 text-right font-mono text-red-500">{Number(h.esi) ? fmt(h.esi) : '—'}</td>
+                    <td className="px-3 py-2 text-right font-mono text-red-500">{Number(h.advance) ? fmt(h.advance) : '—'}</td>
+                    <td className="px-3 py-2 text-right font-mono text-red-500">{Number(h.permission_amount) ? fmt(h.permission_amount) : '—'}</td>
+                    <td className="px-3 py-2 text-right font-mono font-bold">{fmt(h.net_salary)}</td>
+                    <td className="px-3 py-2 text-center"><StatusBadge status={h.payroll_status} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

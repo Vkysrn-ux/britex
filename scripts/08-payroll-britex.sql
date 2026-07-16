@@ -14,6 +14,9 @@ ALTER TABLE hr_payroll_items
   ADD COLUMN IF NOT EXISTS permission_hours NUMERIC(6,2) DEFAULT 0,
   ADD COLUMN IF NOT EXISTS permission_amount NUMERIC(12,2) DEFAULT 0;
 
+-- Per-employee standing ESI amount (used as monthly default; month grid can override)
+ALTER TABLE hr_employees ADD COLUMN IF NOT EXISTS esi_amount NUMERIC(10,2) DEFAULT 0;
+
 -- Manual monthly inputs entered by office (survive re-generation)
 CREATE TABLE IF NOT EXISTS hr_payroll_inputs (
   id SERIAL PRIMARY KEY,
