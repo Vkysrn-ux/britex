@@ -26,11 +26,6 @@ function morningLateMins(timeStr) {
   var dueMins   = toMins(SHIFT_START) + GRACE_MINS
   return Math.max(0, punchMins - dueMins)
 }
-function lunchLateMins(lunchOut, lunchIn) {
-  if (!lunchOut || !lunchIn) return 0
-  var taken = toMins(lunchIn.slice(0, 5)) - toMins(lunchOut.slice(0, 5))
-  return Math.max(0, taken - 30)
-}
 function log(msg) {
   console.log('[' + new Date().toISOString() + '] ' + msg)
 }
@@ -41,6 +36,8 @@ app.use(express.urlencoded({ extended: true }))
 // Log ALL incoming requests
 app.use(function(req, res, next) {
   log('[REQUEST] ' + req.method + ' ' + req.url + ' from ' + (req.headers['x-forwarded-for'] || req.socket.remoteAddress))
+  var qKeys = Object.keys(req.query)
+  if (qKeys.length > 0) log('[PARAMS] ' + JSON.stringify(req.query))
   var body = (typeof req.body === 'string' && req.body.length > 0) ? req.body.slice(0, 300) : ''
   if (body) log('[BODY] ' + body)
   next()
@@ -48,6 +45,39 @@ app.use(function(req, res, next) {
 
 // Set to 0 once to force device to re-send all user records; will auto-advance after first OPERLOG push
 var operlogStamp = 0
+
+// ── Server→device command queue (user sync) ─────────────────────────────────
+// Commands are handed to the device when it polls /iclock/getrequest.aspx,
+// device ACKs each one on POST /iclock/devicecmd with ID=<n>&Return=<code>.
+var ADMIN_TOKEN    = process.env.ADMIN_TOKEN || 'britex-sync-2026'
+var CMDS_PER_POLL  = parseInt(process.env.CMDS_PER_POLL || '3')
+var cmdQueue  = []   // { id, pin, name, cmd, status: pending|sent|ok|failed, return_code }
+var nextCmdId = 1
+
+function checkToken(req, res) {
+  var token = req.query.token || req.headers['x-admin-token'] || ''
+  if (token !== ADMIN_TOKEN) { res.status(403).json({ error: 'bad token' }); return false }
+  return true
+}
+
+function queueUserCmd(pin, name, mode) {
+  name = String(name || '').replace(/[\t\r\n]/g, ' ').trim().slice(0, 24)
+  var body = (mode === 'userinfo')
+    ? 'DATA UPDATE USERINFO PIN=' + pin + '\tName=' + name + '\tPri=0\tPasswd=\tCard=\tGrp=1\tTZ='
+    : 'DATA USER PIN=' + pin + '\tName=' + name + '\tPri=0\tPasswd=\tCard=\tGrp=1\tTZ=0000000000000000'
+  var item = { id: nextCmdId++, pin: pin, name: name, cmd: body, status: 'pending', return_code: null }
+  cmdQueue.push(item)
+  return item
+}
+
+function pendingCmds() {
+  return cmdQueue.filter(function(c) { return c.status === 'pending' })
+}
+
+// Device timezone in minutes east of UTC (330 = IST +5:30).
+// The device syncs its clock from the server on connect; without this it
+// falls back to its internal (post-format, wrong) timezone setting.
+var DEVICE_TZ_MINS = parseInt(process.env.DEVICE_TZ_MINS || '330')
 
 function sendHandshake(res, sn) {
   res.set('Content-Type', 'text/plain')
@@ -61,7 +91,7 @@ function sendHandshake(res, sn) {
     'TransTimes=00:00;14:05\r\n' +
     'TransInterval=1\r\n' +
     'TransFlag=TransData AttLog OpLog\r\n' +
-    'TimeZone=5.5\r\n' +
+    'TimeZone=' + DEVICE_TZ_MINS + '\r\n' +
     'Realtime=1\r\n' +
     'Encrypt=None\r\n'
   )
@@ -70,13 +100,45 @@ function sendHandshake(res, sn) {
 // Handshake — ESSL K30 Pro polls /iclock/getrequest.aspx + /iclock/cdata.aspx
 app.get(['/iclock/cdata', '/iclock/cdata.aspx', '/iclock/getrequest.aspx'], function(req, res) {
   var sn = req.query.SN || req.query.sn || 'UNKNOWN'
+  // getrequest is the command poll: deliver queued user-sync commands if any
+  if (req.path.indexOf('getrequest') !== -1) {
+    var batch = pendingCmds().slice(0, CMDS_PER_POLL)
+    if (batch.length > 0) {
+      var lines = batch.map(function(c) {
+        c.status = 'sent'
+        return 'C:' + c.id + ':' + c.cmd
+      })
+      log('Sending ' + batch.length + ' cmd(s) to SN=' + sn + ' (ids ' + batch.map(function(c){return c.id}).join(',') + ')')
+      res.set('Content-Type', 'text/plain')
+      return res.send(lines.join('\r\n') + '\r\n')
+    }
+  }
   log('Handshake SN=' + sn + ' path=' + req.path)
   sendHandshake(res, sn)
 })
 
+// Device ACKs commands here: body lines like  ID=12&Return=0&CMD=DATA
+app.post(['/iclock/devicecmd', '/iclock/devicecmd.aspx'], function(req, res) {
+  var body  = typeof req.body === 'string' ? req.body : ''
+  var lines = body.split(/\r?\n/).map(function(l) { return l.trim() }).filter(Boolean)
+  for (var i = 0; i < lines.length; i++) {
+    var m = lines[i].match(/ID=(\d+).*?Return=(-?\d+)/i)
+    if (!m) continue
+    var id = parseInt(m[1]), ret = parseInt(m[2])
+    for (var j = 0; j < cmdQueue.length; j++) {
+      if (cmdQueue[j].id === id) {
+        cmdQueue[j].status      = (ret === 0) ? 'ok' : 'failed'
+        cmdQueue[j].return_code = ret
+        log('CMD ' + id + ' (PIN=' + cmdQueue[j].pin + ') -> ' + cmdQueue[j].status + ' Return=' + ret)
+      }
+    }
+  }
+  res.send('OK')
+})
+
 // Catch-all GET
 app.get('*', function(req, res, next) {
-  if (req.url === '/health') return next()
+  if (req.path === '/health' || req.path.indexOf('/admin') === 0) return next()
   var sn = req.query.SN || req.query.sn || 'UNKNOWN'
   log('[ALT-GET] SN=' + sn + ' path=' + req.url)
   sendHandshake(res, sn)
@@ -93,7 +155,8 @@ app.post(['/iclock/cdata', '/iclock/cdata.aspx'], async function(req, res) {
 })
 
 // Catch-all POST
-app.post('*', async function(req, res) {
+app.post('*', async function(req, res, next) {
+  if (req.path.indexOf('/admin') === 0) return next()
   var table = req.query.table || req.query.Table || ''
   var sn    = req.query.SN || req.query.sn || 'UNKNOWN'
   log('[ALT-POST] path=' + req.url + ' table=' + table + ' SN=' + sn)
@@ -179,32 +242,30 @@ async function handleAttlog(req, res, sn) {
         )
         log('  CHECK-IN  PIN=' + pin + ' ' + dateStr + ' ' + punchTime + (lateMins > 0 ? ' LATE+' + lateMins + 'm' : ''))
       } else {
-        var att      = attRes.rows[0]
-        var newCount = (att.punch_count || 1) + 1
-        var lunchOut = att.lunch_out
-        var lunchIn  = att.lunch_in
-        var checkOut = att.check_out
+        // Two-punch model: first punch = check_in, latest punch = check_out.
+        var att = attRes.rows[0]
 
-        // If 2nd punch is after 14:00, it's check_out (most staff punch only twice)
-        // If before 14:00, it's lunch_out
-        var punchHour = parseInt(punchTime.slice(0, 2), 10)
-        if (newCount === 2 && punchHour < 14) {
-          lunchOut = punchTime; log('  LUNCH-OUT PIN=' + pin + ' ' + punchTime)
-        } else if (newCount === 2 && punchHour >= 14) {
-          checkOut = punchTime; log('  CHECK-OUT PIN=' + pin + ' ' + punchTime)
-        } else if (newCount === 3 && !lunchOut) {
-          checkOut = punchTime; log('  CHECK-OUT PIN=' + pin + ' ' + punchTime)
-        } else if (newCount === 3 && lunchOut) {
-          lunchIn  = punchTime; log('  LUNCH-IN  PIN=' + pin + ' ' + punchTime)
-        } else {
-          checkOut = punchTime; log('  CHECK-OUT PIN=' + pin + ' ' + punchTime)
+        // Ignore duplicate re-sends of punches we already have
+        if (punchTime === (att.check_in || '').slice(0,8) || punchTime === (att.check_out || '').slice(0,8)) {
+          log('  DUP       PIN=' + pin + ' ' + punchTime + ' (ignored)')
+          saved++; continue
         }
 
-        var llm = lunchLateMins(lunchOut, lunchIn)
+        var newCount = (att.punch_count || 1) + 1
+        var checkOut = att.check_out
+        // Latest punch of the day wins as check_out
+        if (!checkOut || punchTime > checkOut.slice(0,8)) checkOut = punchTime
+        log('  CHECK-OUT PIN=' + pin + ' ' + punchTime)
+
         var lmm = att.late_morning_mins || morningLateMins((att.check_in || '00:00:00').slice(0,8))
+
+        // Half day: less than 4 hours between check-in and check-out
+        var workedMins = toMins(checkOut.slice(0,5)) - toMins((att.check_in || checkOut).slice(0,5))
+        var status = workedMins < 240 ? 'half_day' : (lmm > 0 ? 'late' : 'present')
+
         await pool.query(
-          'UPDATE hr_attendance SET check_out=$1,lunch_out=$2,lunch_in=$3,punch_count=$4,is_late_lunch=$5,late_lunch_mins=$6,late_morning_mins=$7 WHERE id=$8',
-          [checkOut, lunchOut, lunchIn, newCount, llm>0, llm, lmm, att.id]
+          'UPDATE hr_attendance SET check_out=$1,punch_count=$2,late_morning_mins=$3,status=$4 WHERE id=$5',
+          [checkOut, newCount, lmm, status, att.id]
         )
       }
       saved++
@@ -216,6 +277,68 @@ async function handleAttlog(req, res, sn) {
   log('  saved=' + saved + ' skipped=' + skipped)
   res.send('OK')
 }
+
+// ── Admin: push all active employees to the device as users ─────────────────
+// POST /admin/push-users?token=...           (old ESSL format, default)
+// POST /admin/push-users?token=...&mode=userinfo   (newer PUSH SDK format)
+// PIN is derived from employee_code: BT-09 -> 9
+app.post('/admin/push-users', async function(req, res) {
+  if (!checkToken(req, res)) return
+  var mode = (req.query.mode === 'userinfo') ? 'userinfo' : 'user'
+  try {
+    var r = await pool.query(
+      "SELECT employee_code, TRIM(first_name || ' ' || COALESCE(last_name,'')) AS name FROM hr_employees WHERE status='active' ORDER BY employee_code"
+    )
+    var queued = [], skipped = [], seen = {}
+    for (var i = 0; i < r.rows.length; i++) {
+      var code   = r.rows[i].employee_code || ''
+      var digits = code.replace(/\D/g, '')
+      var pin    = digits ? String(parseInt(digits, 10)) : ''
+      if (!pin || seen[pin]) { skipped.push(code); continue }
+      seen[pin] = true
+      queueUserCmd(pin, r.rows[i].name, mode)
+      queued.push({ pin: pin, code: code, name: r.rows[i].name })
+    }
+    log('ADMIN queued ' + queued.length + ' user cmds (mode=' + mode + '), skipped ' + skipped.length)
+    res.json({ queued: queued.length, skipped: skipped, mode: mode,
+               note: 'Device picks these up on its next polls (' + CMDS_PER_POLL + ' per poll). Watch GET /admin/queue' })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Queue status / results
+app.get('/admin/queue', function(req, res) {
+  if (!checkToken(req, res)) return
+  var counts = { pending: 0, sent: 0, ok: 0, failed: 0 }
+  cmdQueue.forEach(function(c) { counts[c.status] = (counts[c.status] || 0) + 1 })
+  res.json({ counts: counts, commands: cmdQueue.map(function(c) {
+    return { id: c.id, pin: c.pin, name: c.name, status: c.status, return_code: c.return_code }
+  }) })
+})
+
+// Queue a SET OPTION command for the device, e.g. to fix its timezone:
+//   POST /admin/set-option?token=...&key=TimeZone&value=330
+// Or force the clock directly (some firmware ignores TimeZone):
+//   POST /admin/set-option?token=...&key=DateTime&value=<encoded>
+app.post('/admin/set-option', function(req, res) {
+  if (!checkToken(req, res)) return
+  var key = (req.query.key || '').trim(), value = (req.query.value || '').trim()
+  if (!key) return res.status(400).json({ error: 'key required' })
+  var item = { id: nextCmdId++, pin: null, name: key + '=' + value,
+               cmd: 'SET OPTION ' + key + '=' + value, status: 'pending', return_code: null }
+  cmdQueue.push(item)
+  log('ADMIN queued SET OPTION ' + key + '=' + value + ' (cmd ' + item.id + ')')
+  res.json({ queued: item.id, cmd: item.cmd, note: 'Device applies it on next poll; check GET /admin/queue' })
+})
+
+// Clear the queue (e.g. before retrying with the other mode)
+app.post('/admin/clear-queue', function(req, res) {
+  if (!checkToken(req, res)) return
+  var n = cmdQueue.length
+  cmdQueue = []
+  res.json({ cleared: n })
+})
 
 app.get('/health', async function(_req, res) {
   try {

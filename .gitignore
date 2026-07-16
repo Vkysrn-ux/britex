@@ -25,3 +25,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+# attendance listener deps
+attendance-listener/node_modules/
+
+# personal data files (salary sheets, biometric exports)
+public/*.xlsx
+public/*.xls
+public/*.dat

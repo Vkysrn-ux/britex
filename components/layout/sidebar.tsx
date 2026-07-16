@@ -2,11 +2,10 @@
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import {
-  BarChart3, Package, Zap, ShoppingCart, Users, CheckSquare, Truck,
-  UserCog, ChevronDown, ChevronRight, LayoutDashboard, CalendarCheck,
-  FileText, DollarSign, Building2, TableProperties, Clock
+  Users, UserCog, ChevronDown, ChevronRight, LayoutDashboard, CalendarCheck,
+  FileText, DollarSign, Building2, TableProperties, Clock,
+  Factory, ClipboardList, BarChart3, Truck
 } from "lucide-react"
-import { ROLE_MODULES } from "@/lib/roles"
 
 interface SidebarProps {
   activeModule: string
@@ -14,30 +13,6 @@ interface SidebarProps {
   sidebarOpen: boolean
   userRole: string
 }
-
-const MODULE_ICONS: Record<string, any> = {
-  analytics: BarChart3,
-  inventory: Package,
-  production: Zap,
-  orders: ShoppingCart,
-  purchasing: ShoppingCart,
-  suppliers: Users,
-  quality: CheckSquare,
-  dispatch: Truck,
-  subcontract: Package,
-}
-
-const MODULES = [
-  { id: "analytics",   label: "Dashboard",      icon: "analytics" },
-  { id: "inventory",   label: "Inventory",       icon: "inventory" },
-  { id: "production",  label: "Production",      icon: "production" },
-  { id: "orders",      label: "Orders",          icon: "orders" },
-  { id: "purchasing",  label: "Purchasing",      icon: "purchasing" },
-  { id: "suppliers",   label: "Suppliers",       icon: "suppliers" },
-  { id: "quality",     label: "Quality Control", icon: "quality" },
-  { id: "dispatch",    label: "Dispatch",        icon: "dispatch" },
-  { id: "subcontract", label: "Subcontracting",  icon: "subcontract" },
-]
 
 const HR_SUB_MODULES = [
   { id: "hr:dashboard",        label: "HR Dashboard",    icon: LayoutDashboard },
@@ -50,13 +25,18 @@ const HR_SUB_MODULES = [
   { id: "hr:departments",      label: "Departments",     icon: Building2 },
 ]
 
-export default function Sidebar({ activeModule, setActiveModule, sidebarOpen, userRole }: SidebarProps) {
-  const isHR = activeModule.startsWith("hr")
-  const [hrExpanded, setHrExpanded] = useState(isHR)
+const PROD_SUB_MODULES = [
+  { id: "production:dashboard",   label: "Production Dashboard", icon: LayoutDashboard },
+  { id: "production:daily-entry", label: "Daily Entry",          icon: ClipboardList },
+  { id: "production:tailor-report", label: "Tailor Report",      icon: BarChart3 },
+  { id: "production:dispatch",    label: "Dispatch Counts",      icon: Truck },
+]
 
-  const allowed = ROLE_MODULES[userRole] || ROLE_MODULES['admin']
-  const visibleModules = MODULES.filter(m => allowed.includes(m.id))
-  const showHR = allowed.includes('hr')
+export default function Sidebar({ activeModule, setActiveModule, sidebarOpen }: SidebarProps) {
+  const isHR = activeModule.startsWith("hr")
+  const isProd = activeModule.startsWith("production")
+  const [hrExpanded, setHrExpanded] = useState(true)
+  const [prodExpanded, setProdExpanded] = useState(true)
 
   const handleHRClick = () => {
     if (!sidebarOpen) {
@@ -71,6 +51,19 @@ export default function Sidebar({ activeModule, setActiveModule, sidebarOpen, us
     }
   }
 
+  const handleProdClick = () => {
+    if (!sidebarOpen) {
+      setActiveModule("production:dashboard")
+      return
+    }
+    if (!isProd) {
+      setActiveModule("production:dashboard")
+      setProdExpanded(true)
+    } else {
+      setProdExpanded(e => !e)
+    }
+  }
+
   return (
     <div
       className={`bg-white border-r border-orange-200 flex flex-col transition-all duration-300 ${
@@ -82,27 +75,8 @@ export default function Sidebar({ activeModule, setActiveModule, sidebarOpen, us
       </div>
 
       <nav className="flex-1 overflow-y-auto p-3 space-y-1">
-        {visibleModules.map((module) => {
-          const Icon = MODULE_ICONS[module.icon]
-          return (
-            <Button
-              key={module.id}
-              variant={activeModule === module.id ? "default" : "ghost"}
-              className={`w-full justify-start ${
-                activeModule === module.id
-                  ? "bg-orange-600 hover:bg-orange-700 text-white"
-                  : "text-black hover:text-black hover:bg-orange-50"
-              }`}
-              onClick={() => setActiveModule(module.id)}
-            >
-              <Icon className="w-5 h-5 shrink-0" />
-              {sidebarOpen && <span className="ml-3">{module.label}</span>}
-            </Button>
-          )
-        })}
-
         {/* HR Section */}
-        {showHR && <div className="pt-1">
+        <div className="pt-1">
           {sidebarOpen && (
             <p className="px-2 pb-1 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">
               Human Resources
@@ -156,7 +130,62 @@ export default function Sidebar({ activeModule, setActiveModule, sidebarOpen, us
               })}
             </div>
           )}
-        </div>}
+        </div>
+
+        {/* Production Section */}
+        <div className="pt-3">
+          {sidebarOpen && (
+            <p className="px-2 pb-1 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">
+              Production
+            </p>
+          )}
+
+          <Button
+            variant="ghost"
+            className={`w-full justify-start ${
+              isProd
+                ? "bg-orange-600 hover:bg-orange-700 text-white"
+                : "text-black hover:text-black hover:bg-orange-50"
+            }`}
+            onClick={handleProdClick}
+          >
+            <Factory className="w-5 h-5 shrink-0" />
+            {sidebarOpen && (
+              <>
+                <span className="ml-3 flex-1 text-left">Production</span>
+                {prodExpanded
+                  ? <ChevronDown className="w-4 h-4" />
+                  : <ChevronRight className="w-4 h-4" />
+                }
+              </>
+            )}
+          </Button>
+
+          {sidebarOpen && prodExpanded && (
+            <div className="ml-4 mt-0.5 border-l-2 border-orange-100 pl-2 space-y-0.5">
+              {PROD_SUB_MODULES.map((sub) => {
+                const Icon = sub.icon
+                const active = activeModule === sub.id
+                return (
+                  <Button
+                    key={sub.id}
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setActiveModule(sub.id)}
+                    className={`w-full justify-start h-8 text-xs ${
+                      active
+                        ? "bg-orange-100 text-orange-700 font-medium"
+                        : "text-gray-600 hover:text-orange-700 hover:bg-orange-50"
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5 shrink-0" />
+                    <span className="ml-2">{sub.label}</span>
+                  </Button>
+                )
+              })}
+            </div>
+          )}
+        </div>
       </nav>
     </div>
   )

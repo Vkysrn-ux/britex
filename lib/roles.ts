@@ -1,12 +1,13 @@
 // Role → allowed module IDs (client-safe, no server imports)
+// Modules are being rebuilt from scratch; HR is the only live module.
 export const ROLE_MODULES: Record<string, string[]> = {
-  admin:      ['analytics','inventory','production','orders','purchasing','suppliers','quality','dispatch','subcontract','hr'],
+  admin:      ['hr'],
   hr:         ['hr'],
-  production: ['analytics','inventory','production'],
-  quality:    ['analytics','inventory','quality'],
-  sales:      ['analytics','orders','inventory'],
-  warehouse:  ['analytics','inventory','dispatch'],
-  manager:    ['analytics','inventory','production','orders','purchasing','suppliers','quality','dispatch','subcontract','hr'],
+  production: ['hr'],
+  quality:    ['hr'],
+  sales:      ['hr'],
+  warehouse:  ['hr'],
+  manager:    ['hr'],
 }
 
 export function canAccess(role: string, moduleId: string): boolean {

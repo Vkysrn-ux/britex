@@ -1318,8 +1318,6 @@ function AttendanceSection() {
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">DEPT</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-green-600">IN</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-yellow-600">LUNCH OUT</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-yellow-600">LUNCH IN</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-red-500">OUT</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">HRS</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">PUNCHES</th>
@@ -1340,8 +1338,6 @@ function AttendanceSection() {
                         <td className="px-4 py-3 font-semibold text-gray-900">{emp.name}</td>
                         <td className="px-4 py-3 text-gray-500 text-xs">{emp.department_name || '—'}</td>
                         <td className="px-4 py-3 font-semibold text-green-600 font-mono text-xs">{fmtTime(emp.check_in)}</td>
-                        <td className="px-4 py-3 font-mono text-xs text-yellow-600">{fmtTime(emp.lunch_out)}</td>
-                        <td className="px-4 py-3 font-mono text-xs text-yellow-600">{fmtTime(emp.lunch_in)}</td>
                         <td className="px-4 py-3 font-semibold text-red-500 font-mono text-xs">{fmtTime(emp.check_out)}</td>
                         <td className="px-4 py-3 text-gray-700 font-mono text-xs">{wh > 0 ? fmtWH(wh) : <span className="text-gray-300">—</span>}</td>
                         <td className="px-4 py-3 text-center text-xs font-mono text-gray-500">{emp.punch_count ?? '—'}</td>
@@ -1639,155 +1635,212 @@ function LeaveSection({ employees }: { employees: Employee[] }) {
 // ─── Payroll ──────────────────────────────────────────────────────────────────
 
 function PayrollSection() {
-  const [payrolls, setPayrolls] = useState<Payroll[]>([])
+  const today = new Date()
+  const [month, setMonth] = useState(today.getMonth() + 1)
+  const [year, setYear] = useState(today.getFullYear())
+  const [run, setRun] = useState<any>(null)          // hr_payroll row for month/year
   const [items, setItems] = useState<any[]>([])
-  const [selectedId, setSelectedId] = useState<number | null>(null)
-  const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState(() => { const d = new Date(); return { month: String(d.getMonth()+1), year: String(d.getFullYear()), notes: '' } })
-  const [processing, setProcessing] = useState<number | null>(null)
-  const [saving, setSaving] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [dirty, setDirty] = useState(false)
   const [msg, setMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
 
-  const loadPayrolls = () => {
-    fetch('/api/hr/payroll').then(r => r.json()).then(d => setPayrolls(d.data || []))
-  }
+  const locked = run?.status === 'paid'
 
-  const loadItems = (id: number) => {
-    setSelectedId(id)
-    fetch(`/api/hr/payroll/${id}/items`).then(r => r.json()).then(d => setItems(d.data || []))
-  }
+  const load = useCallback(async () => {
+    const d = await fetch('/api/hr/payroll').then(r => r.json())
+    const found = (d.data || []).find((p: any) => Number(p.month) === month && Number(p.year) === year) || null
+    setRun(found)
+    if (found) {
+      const it = await fetch(`/api/hr/payroll/${found.id}/items`).then(r => r.json())
+      setItems(it.data || [])
+    } else setItems([])
+    setDirty(false)
+  }, [month, year])
 
-  useEffect(() => { loadPayrolls() }, [])
+  useEffect(() => { load() }, [load])
 
-  const handleCreate = async (ev: React.FormEvent) => {
-    ev.preventDefault(); setSaving(true); setMsg(null)
+  // Create run (if needed) + compute from attendance
+  const generate = async () => {
+    setBusy(true); setMsg(null)
     try {
-      const res = await fetch('/api/hr/payroll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
+      let id = run?.id
+      if (!id) {
+        const res = await fetch('/api/hr/payroll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ month, year }) })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error)
+        id = data.id
+      }
+      const res2 = await fetch(`/api/hr/payroll/${id}/process`, { method: 'POST' })
+      const data2 = await res2.json()
+      if (!res2.ok) throw new Error(data2.error)
+      setMsg({ text: `Salary computed for ${data2.employees_count} employees (${data2.working_days} working days).`, type: 'success' })
+      await load()
+    } catch (err: any) { setMsg({ text: err.message, type: 'error' }) }
+    finally { setBusy(false) }
+  }
+
+  // Save edited advance/permission/ESI, then recompute
+  const saveAndRecalc = async () => {
+    if (!run) return
+    setBusy(true); setMsg(null)
+    try {
+      const entries = items.map(it => ({
+        employee_id: it.employee_id,
+        advance: Number(it.advance) || 0,
+        permission_hours: Number(it.permission_hours) || 0,
+        esi: Number(it.esi) || 0,
+      }))
+      const res = await fetch('/api/hr/payroll/inputs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ month, year, entries }) })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
-      setMsg({ text: 'Payroll run created.', type: 'success' })
-      setShowForm(false); loadPayrolls()
+      const res2 = await fetch(`/api/hr/payroll/${run.id}/process`, { method: 'POST' })
+      if (!res2.ok) throw new Error((await res2.json()).error)
+      setMsg({ text: 'Inputs saved and salary recalculated.', type: 'success' })
+      await load()
     } catch (err: any) { setMsg({ text: err.message, type: 'error' }) }
-    finally { setSaving(false) }
+    finally { setBusy(false) }
   }
 
-  const handleProcess = async (id: number) => {
-    setProcessing(id); setMsg(null)
+  const approve = async () => {
+    if (!run) return
+    if (!confirm(`Approve and LOCK salary for ${MONTHS[month-1]} ${year}? After this no changes are possible.`)) return
+    setBusy(true); setMsg(null)
     try {
-      const res = await fetch(`/api/hr/payroll/${id}/process`, { method: 'POST' })
+      const res = await fetch(`/api/hr/payroll/${run.id}/approve`, { method: 'POST' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
-      setMsg({ text: `Payroll processed for ${data.employees_count} employees.`, type: 'success' })
-      loadPayrolls(); if (selectedId === id) loadItems(id)
+      setMsg({ text: 'Payroll approved and locked.', type: 'success' })
+      await load()
     } catch (err: any) { setMsg({ text: err.message, type: 'error' }) }
-    finally { setProcessing(null) }
+    finally { setBusy(false) }
   }
+
+  const editItem = (idx: number, field: string, value: string) => {
+    setItems(list => list.map((it, i) => i === idx ? { ...it, [field]: value } : it))
+    setDirty(true)
+  }
+
+  const num = (v: any) => Number(v) || 0
+  const totals = items.reduce((t, it) => ({
+    working: t.working + num(it.working_salary), sunday: t.sunday + num(it.sunday_salary),
+    incentive: t.incentive + num(it.incentive), perm: t.perm + num(it.permission_amount),
+    advance: t.advance + num(it.advance), esi: t.esi + num(it.esi), net: t.net + num(it.net_salary),
+  }), { working: 0, sunday: 0, incentive: 0, perm: 0, advance: 0, esi: 0, net: 0 })
+
+  const inputCls = "w-16 px-1 py-0.5 border rounded text-right text-xs disabled:bg-gray-50 disabled:text-gray-400"
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div><h2 className="text-xl font-bold text-gray-900">Payroll</h2></div>
-        <Button onClick={() => setShowForm(s => !s)} className="bg-orange-600 hover:bg-orange-700 text-white">
-          <Plus className="w-4 h-4 mr-2" />New Payroll Run
-        </Button>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-xl font-bold text-gray-900">Payroll</h2>
+          <p className="text-xs text-gray-500">Salary = day rate × attendance · 5% incentive on full attendance · permission = 1 hr</p>
+        </div>
+        <div className="flex items-end gap-2">
+          <select value={month} onChange={e => setMonth(Number(e.target.value))} className="border rounded-md px-3 py-2 text-sm">
+            {MONTHS.map((m, i) => <option key={i} value={i+1}>{m}</option>)}
+          </select>
+          <Input type="number" value={year} onChange={e => setYear(Number(e.target.value))} className="w-24" />
+          {!locked && (
+            <Button onClick={generate} disabled={busy} className="bg-orange-600 hover:bg-orange-700 text-white">
+              {busy ? 'Working…' : run ? 'Recalculate from Attendance' : 'Generate Salary'}
+            </Button>
+          )}
+          {run && !locked && dirty && (
+            <Button onClick={saveAndRecalc} disabled={busy} className="bg-blue-600 hover:bg-blue-700 text-white">Save Inputs & Recalculate</Button>
+          )}
+          {run?.status === 'processed' && !dirty && (
+            <Button onClick={approve} disabled={busy} className="bg-green-600 hover:bg-green-700 text-white">Approve & Lock</Button>
+          )}
+        </div>
       </div>
 
       {msg && <div className={`p-3 rounded-lg text-sm ${msg.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>{msg.text}</div>}
 
-      {showForm && (
-        <Card className="border-orange-200">
-          <CardHeader className="pb-3"><CardTitle className="text-base">Create Payroll Run</CardTitle></CardHeader>
-          <CardContent>
-            <form onSubmit={handleCreate} className="flex gap-3 items-end">
-              <div><label className="text-xs font-medium text-gray-600">Month</label>
-                <select value={form.month} onChange={e => setForm(f => ({ ...f, month: e.target.value }))} className="mt-1 border rounded-md px-3 py-2 text-sm">
-                  {MONTHS.map((m, i) => <option key={i} value={String(i+1)}>{m}</option>)}
-                </select></div>
-              <div><label className="text-xs font-medium text-gray-600">Year</label>
-                <Input type="number" value={form.year} onChange={e => setForm(f => ({ ...f, year: e.target.value }))} className="mt-1 w-24" /></div>
-              <div className="flex-1"><label className="text-xs font-medium text-gray-600">Notes</label>
-                <Input value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="mt-1" /></div>
-              <Button type="submit" disabled={saving} className="bg-orange-600 hover:bg-orange-700 text-white">{saving ? 'Creating…' : 'Create'}</Button>
-              <Button type="button" variant="outline" onClick={() => setShowForm(false)}>Cancel</Button>
-            </form>
-          </CardContent>
-        </Card>
+      {run && (
+        <div className="flex items-center gap-4 text-sm">
+          <StatusBadge status={run.status} />
+          {locked && <span className="text-xs text-gray-500">Locked — approved payroll cannot be changed</span>}
+          {!locked && items.length > 0 && <span className="text-xs text-gray-500">Type advance / permission hours / ESI directly in the table, then Save & Recalculate</span>}
+        </div>
       )}
 
-      <div className="grid grid-cols-2 gap-4">
-        <Card className="border-orange-100">
-          <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold text-gray-700">Payroll Runs</CardTitle></CardHeader>
-          <div className="overflow-y-auto max-h-80">
-            <table className="w-full text-sm">
-              <thead><tr className="border-b border-orange-100 bg-orange-50">
-                <th className="px-3 py-2 text-left font-medium text-gray-600">Period</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-600">Net</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-600">Status</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-600">Action</th>
-              </tr></thead>
+      {!run ? (
+        <div className="py-16 text-center text-gray-400 border border-dashed border-orange-200 rounded-xl">
+          No salary generated for {MONTHS[month-1]} {year} yet — press <strong>Generate Salary</strong>
+        </div>
+      ) : (
+        <div className="border border-orange-100 rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs border-collapse" style={{ minWidth: '1100px' }}>
+              <thead>
+                <tr className="bg-orange-50 border-b border-orange-100">
+                  <th className="px-2 py-2 text-left font-semibold text-gray-600">Code</th>
+                  <th className="px-2 py-2 text-left font-semibold text-gray-600">Name</th>
+                  <th className="px-2 py-2 text-right font-semibold text-gray-600">Rate</th>
+                  <th className="px-2 py-2 text-center font-semibold text-green-700" title="Full present days">P</th>
+                  <th className="px-2 py-2 text-center font-semibold text-yellow-700" title="Half days">H</th>
+                  <th className="px-2 py-2 text-center font-semibold text-orange-500" title="Sundays worked">Sun</th>
+                  <th className="px-2 py-2 text-center font-semibold text-red-500" title="Absent days">Abs</th>
+                  <th className="px-2 py-2 text-right font-semibold text-gray-600">Working ₹</th>
+                  <th className="px-2 py-2 text-right font-semibold text-gray-600">Sunday ₹</th>
+                  <th className="px-2 py-2 text-right font-semibold text-green-700" title="5% full attendance">Incentive</th>
+                  <th className="px-2 py-2 text-right font-semibold text-blue-700" title="Permission hours (1 = 1 hr)">Perm hrs</th>
+                  <th className="px-2 py-2 text-right font-semibold text-red-500">Perm ₹</th>
+                  <th className="px-2 py-2 text-right font-semibold text-red-500">Advance</th>
+                  <th className="px-2 py-2 text-right font-semibold text-red-500">ESI</th>
+                  <th className="px-2 py-2 text-right font-semibold text-gray-900">Net Salary</th>
+                </tr>
+              </thead>
               <tbody>
-                {payrolls.length === 0 ? (
-                  <tr><td colSpan={4} className="py-8 text-center text-gray-400">No payroll runs yet</td></tr>
-                ) : payrolls.map(p => (
-                  <tr key={p.id} className={`border-b border-gray-50 cursor-pointer hover:bg-orange-50/30 ${selectedId === p.id ? 'bg-orange-50' : ''}`} onClick={() => loadItems(p.id)}>
-                    <td className="px-3 py-2.5 font-medium text-gray-900">{MONTHS[p.month-1]} {p.year}</td>
-                    <td className="px-3 py-2.5 text-gray-600">{fmt(p.total_net)}</td>
-                    <td className="px-3 py-2.5"><StatusBadge status={p.status} /></td>
-                    <td className="px-3 py-2.5">
-                      {p.status === 'draft' && (
-                        <Button size="sm" disabled={processing === p.id} onClick={ev => { ev.stopPropagation(); handleProcess(p.id) }}
-                          className="h-7 px-2 bg-blue-600 hover:bg-blue-700 text-white text-xs">
-                          {processing === p.id ? 'Processing…' : 'Process'}
-                        </Button>
-                      )}
+                {items.map((it, idx) => (
+                  <tr key={it.id} className={`border-b border-gray-100 hover:bg-orange-50/30 ${num(it.day_rate) === 0 ? 'bg-red-50/40' : idx % 2 ? 'bg-gray-50/30' : 'bg-white'}`}>
+                    <td className="px-2 py-1.5 font-mono text-gray-500">{it.employee_code}</td>
+                    <td className="px-2 py-1.5 font-medium text-gray-900 whitespace-nowrap">{it.employee_name}
+                      {num(it.day_rate) === 0 && <span className="ml-1 text-[10px] text-red-500 font-semibold">no rate!</span>}
                     </td>
+                    <td className="px-2 py-1.5 text-right font-mono">{num(it.day_rate)}</td>
+                    <td className="px-2 py-1.5 text-center text-green-700 font-semibold">{num(it.present_days)}</td>
+                    <td className="px-2 py-1.5 text-center text-yellow-700">{num(it.half_days) || '—'}</td>
+                    <td className="px-2 py-1.5 text-center text-orange-500">{num(it.sunday_days) || '—'}</td>
+                    <td className="px-2 py-1.5 text-center text-red-500">{num(it.absent_days) || '—'}</td>
+                    <td className="px-2 py-1.5 text-right font-mono">{fmt(it.working_salary)}</td>
+                    <td className="px-2 py-1.5 text-right font-mono">{num(it.sunday_salary) ? fmt(it.sunday_salary) : '—'}</td>
+                    <td className="px-2 py-1.5 text-right font-mono text-green-700">{num(it.incentive) ? fmt(it.incentive) : '—'}</td>
+                    <td className="px-2 py-1.5 text-right">
+                      <input type="number" step="0.5" min="0" disabled={locked} value={it.permission_hours ?? 0}
+                        onChange={e => editItem(idx, 'permission_hours', e.target.value)} className={inputCls} />
+                    </td>
+                    <td className="px-2 py-1.5 text-right font-mono text-red-500">{num(it.permission_amount) ? '-' + fmt(it.permission_amount) : '—'}</td>
+                    <td className="px-2 py-1.5 text-right">
+                      <input type="number" step="100" min="0" disabled={locked} value={it.advance ?? 0}
+                        onChange={e => editItem(idx, 'advance', e.target.value)} className={inputCls} />
+                    </td>
+                    <td className="px-2 py-1.5 text-right">
+                      <input type="number" step="1" min="0" disabled={locked} value={it.esi ?? 0}
+                        onChange={e => editItem(idx, 'esi', e.target.value)} className={inputCls} />
+                    </td>
+                    <td className="px-2 py-1.5 text-right font-mono font-bold text-gray-900">{fmt(it.net_salary)}</td>
                   </tr>
                 ))}
+                {items.length > 0 && (
+                  <tr className="bg-orange-50 font-bold border-t-2 border-orange-200">
+                    <td colSpan={7} className="px-2 py-2 text-gray-700">TOTAL — {items.length} employees</td>
+                    <td className="px-2 py-2 text-right font-mono">{fmt(totals.working)}</td>
+                    <td className="px-2 py-2 text-right font-mono">{fmt(totals.sunday)}</td>
+                    <td className="px-2 py-2 text-right font-mono text-green-700">{fmt(totals.incentive)}</td>
+                    <td />
+                    <td className="px-2 py-2 text-right font-mono text-red-500">-{fmt(totals.perm)}</td>
+                    <td className="px-2 py-2 text-right font-mono text-red-500">-{fmt(totals.advance)}</td>
+                    <td className="px-2 py-2 text-right font-mono text-red-500">-{fmt(totals.esi)}</td>
+                    <td className="px-2 py-2 text-right font-mono text-lg">{fmt(totals.net)}</td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
-        </Card>
-
-        <Card className="border-orange-100">
-          <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold text-gray-700">
-            {selectedId ? `Payslips — ${MONTHS[(payrolls.find(p => p.id === selectedId)?.month || 1)-1]} ${payrolls.find(p => p.id === selectedId)?.year}` : 'Select a payroll run'}
-          </CardTitle></CardHeader>
-          <div className="overflow-y-auto max-h-80">
-            {!selectedId ? (
-              <div className="py-12 text-center text-gray-400 text-sm">Click a payroll run to view payslips</div>
-            ) : (
-              <table className="w-full text-sm">
-                <thead><tr className="border-b border-orange-100 bg-orange-50">
-                  <th className="px-3 py-2 text-left font-medium text-gray-600">Employee</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">Gross</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">Tax</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">Net</th>
-                </tr></thead>
-                <tbody>
-                  {items.length === 0 ? (
-                    <tr><td colSpan={4} className="py-8 text-center text-gray-400">Not processed yet</td></tr>
-                  ) : items.map(it => (
-                    <tr key={it.id} className="border-b border-gray-50 hover:bg-orange-50/30">
-                      <td className="px-3 py-2.5"><div className="font-medium text-gray-900">{it.employee_name}</div><div className="text-xs text-gray-400">{it.employee_code}</div></td>
-                      <td className="px-3 py-2.5 text-right text-gray-600">{fmt(it.gross_salary)}</td>
-                      <td className="px-3 py-2.5 text-right text-red-500">-{fmt(it.tax_deduction)}</td>
-                      <td className="px-3 py-2.5 text-right font-semibold text-green-600">{fmt(it.net_salary)}</td>
-                    </tr>
-                  ))}
-                  {items.length > 0 && (
-                    <tr className="bg-orange-50 font-semibold">
-                      <td className="px-3 py-2 text-gray-700">Total</td>
-                      <td className="px-3 py-2 text-right">{fmt(items.reduce((s, i) => s + +i.gross_salary, 0))}</td>
-                      <td className="px-3 py-2 text-right text-red-500">-{fmt(items.reduce((s, i) => s + +i.tax_deduction, 0))}</td>
-                      <td className="px-3 py-2 text-right text-green-600">{fmt(items.reduce((s, i) => s + +i.net_salary, 0))}</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </Card>
-      </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1951,7 +2004,6 @@ function DayCell({ rec, isSunday }: { rec: any; isSunday: boolean }) {
   return (
     <td className="px-0 py-1 text-center relative">
       <span className={`inline-block w-7 rounded text-[11px] font-bold ${m.bg} ${m.text}`}>{m.code}</span>
-      {rec.is_late_lunch && <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-purple-500" title="Lunch late" />}
     </td>
   )
 }
@@ -1985,7 +2037,7 @@ function AttendanceSheetSection({ departments }: { departments: Department[] }) 
     const XLSX = await import('xlsx')
     const header = ['S.No', 'Emp ID', 'Name', 'Department',
       ...(data.days || []).map((d: any) => `${d.day}\n${d.dow}`),
-      'P', 'A', 'HD', 'CL', 'Sun', 'Late', 'L.Ln', 'Total']
+      'P', 'A', 'HD', 'CL', 'Sun', 'Late', 'Total']
     const rows = (data.employees || []).map((emp: any, i: number) => [
       i + 1, emp.employee_code, emp.name, emp.department_name,
       ...(data.days || []).map((d: any) => {
@@ -1997,7 +2049,7 @@ function AttendanceSheetSection({ departments }: { departments: Department[] }) 
       }),
       emp.summary.present, emp.summary.absent, emp.summary.half_day,
       emp.summary.on_leave, emp.summary.sundays,
-      emp.summary.late_morning ?? 0, emp.summary.late_lunch ?? 0, data.total_days,
+      emp.summary.late_morning ?? 0, data.total_days,
     ])
     const ws = XLSX.utils.aoa_to_sheet([header, ...rows])
     const wb = XLSX.utils.book_new()
@@ -2068,7 +2120,6 @@ function AttendanceSheetSection({ departments }: { departments: Department[] }) 
         ].map(([c,l,t],i) => (
           <span key={i}><span className={`font-bold ${t}`}>{c}</span> = {l}</span>
         ))}
-        <span><span className="inline-block w-2 h-2 rounded-full bg-purple-500 mr-1" />= Lunch late (&gt;30 min)</span>
       </div>
 
       {/* Grid */}
@@ -2087,7 +2138,7 @@ function AttendanceSheetSection({ departments }: { departments: Department[] }) 
                   <th colSpan={days.length} className="border border-gray-200 bg-orange-600 text-white px-3 py-2 text-center text-sm font-bold">
                     {MONTHS_FULL[month-1].toUpperCase()} {year}
                   </th>
-                  <th colSpan={8} className="border border-gray-200 bg-orange-600 text-white px-3 py-2 text-center text-sm font-bold">SUMMARY</th>
+                  <th colSpan={7} className="border border-gray-200 bg-orange-600 text-white px-3 py-2 text-center text-sm font-bold">SUMMARY</th>
                 </tr>
                 {/* Column headers row 1 — day numbers */}
                 <tr className="bg-orange-50">
@@ -2106,7 +2157,6 @@ function AttendanceSheetSection({ departments }: { departments: Department[] }) 
                   <th className="border border-gray-200 px-1 py-1.5 text-center text-blue-700 font-bold w-8">CL</th>
                   <th className="border border-gray-200 px-1 py-1.5 text-center text-orange-500 font-bold w-9">Sun</th>
                   <th className="border border-gray-200 px-1 py-1.5 text-center text-orange-700 font-bold w-9" title="Morning Late Count">Late</th>
-                  <th className="border border-gray-200 px-1 py-1.5 text-center text-purple-600 font-bold w-9" title="Lunch Late Count">L.Ln</th>
                   <th className="border border-gray-200 px-1 py-1.5 text-center text-gray-700 font-bold w-10">Total</th>
                 </tr>
                 {/* Column headers row 2 — day of week */}
@@ -2117,13 +2167,13 @@ function AttendanceSheetSection({ departments }: { departments: Department[] }) 
                       {d.dow}
                     </th>
                   ))}
-                  <th colSpan={8} className="border border-gray-200" />
+                  <th colSpan={7} className="border border-gray-200" />
                 </tr>
               </thead>
 
               <tbody>
                 {employees.length === 0 ? (
-                  <tr><td colSpan={4 + days.length + 8} className="py-16 text-center text-gray-400">No employees found</td></tr>
+                  <tr><td colSpan={4 + days.length + 7} className="py-16 text-center text-gray-400">No employees found</td></tr>
                 ) : employees.map((emp, idx) => (
                   <React.Fragment key={emp.id}>
                     <tr
@@ -2143,20 +2193,18 @@ function AttendanceSheetSection({ departments }: { departments: Department[] }) 
                       <td className="border border-gray-100 px-1 py-1.5 text-center font-bold text-blue-700">{emp.summary.on_leave}</td>
                       <td className="border border-gray-100 px-1 py-1.5 text-center font-bold text-orange-500">{emp.summary.sundays}</td>
                       <td className="border border-gray-100 px-1 py-1.5 text-center font-bold text-orange-700">{emp.summary.late_morning ?? 0}</td>
-                      <td className="border border-gray-100 px-1 py-1.5 text-center font-bold text-purple-600">{emp.summary.late_lunch ?? 0}</td>
                       <td className="border border-gray-100 px-1 py-1.5 text-center font-bold text-gray-700">{data.total_days}</td>
                     </tr>
 
                     {/* Expanded detail table — morning late / lunch late */}
                     {expandedEmp === emp.id && (
                       <tr key={`${emp.id}-expanded`}>
-                        <td colSpan={4 + days.length + 8} className="border border-orange-200 bg-orange-50/50 p-0">
+                        <td colSpan={4 + days.length + 7} className="border border-orange-200 bg-orange-50/50 p-0">
                           <div className="px-4 pt-3 pb-4">
                             <p className="text-xs font-semibold text-orange-700 mb-2">
                               {emp.name} — {MONTHS_FULL[month-1]} {year} · punch detail
                               <span className="ml-4 text-[10px] font-normal text-gray-400">
                                 Late arrivals: <strong className="text-orange-600">{emp.summary.late_morning ?? 0}</strong>
-                                &nbsp;·&nbsp;Lunch late: <strong className="text-purple-600">{emp.summary.late_lunch ?? 0}</strong>
                               </span>
                             </p>
                             <div className="overflow-x-auto">
@@ -2167,11 +2215,8 @@ function AttendanceSheetSection({ departments }: { departments: Department[] }) 
                                     <th className="px-2 py-1.5 text-left font-semibold text-gray-500 w-10">DOW</th>
                                     <th className="px-2 py-1.5 text-center font-semibold text-gray-500 w-16">Punches</th>
                                     <th className="px-2 py-1.5 text-center font-semibold text-green-600 w-16">Entry</th>
-                                    <th className="px-2 py-1.5 text-center font-semibold text-yellow-600 w-16">Lunch Out</th>
-                                    <th className="px-2 py-1.5 text-center font-semibold text-yellow-600 w-16">Lunch In</th>
                                     <th className="px-2 py-1.5 text-center font-semibold text-red-500 w-16">Exit</th>
                                     <th className="px-2 py-1.5 text-center font-semibold text-orange-600 w-24">Morning Late</th>
-                                    <th className="px-2 py-1.5 text-center font-semibold text-purple-600 w-24">Lunch Late</th>
                                     <th className="px-2 py-1.5 text-center font-semibold text-gray-500 w-16">Status</th>
                                   </tr>
                                 </thead>
@@ -2181,23 +2226,19 @@ function AttendanceSheetSection({ departments }: { departments: Department[] }) 
                                       <tr key={d.day} className="bg-orange-50">
                                         <td className="px-2 py-1 font-bold text-orange-400">{d.day}</td>
                                         <td className="px-2 py-1 text-orange-300">{d.dow}</td>
-                                        <td colSpan={8} className="px-2 py-1 text-orange-300">Sunday</td>
+                                        <td colSpan={5} className="px-2 py-1 text-orange-300">Sunday</td>
                                       </tr>
                                     )
                                     if (d.is_future) return (
                                       <tr key={d.day} className="bg-gray-50/30">
                                         <td className="px-2 py-1 font-semibold text-gray-300">{d.day}</td>
                                         <td className="px-2 py-1 text-gray-300">{d.dow}</td>
-                                        <td colSpan={8} className="px-2 py-1 text-gray-200 text-[10px]">— upcoming —</td>
+                                        <td colSpan={5} className="px-2 py-1 text-gray-200 text-[10px]">— upcoming —</td>
                                       </tr>
                                     )
                                     const rec = emp.attendance[d.day] === 'future' ? null : emp.attendance[d.day]
                                     const isLateM = rec?.status === 'late'
-                                    const isLateL = rec?.is_late_lunch
-                                    const rowCls = isLateM && isLateL
-                                      ? 'bg-purple-50'
-                                      : isLateM ? 'bg-orange-50'
-                                      : isLateL ? 'bg-purple-50/50'
+                                    const rowCls = isLateM ? 'bg-orange-50'
                                       : !rec ? 'bg-red-50/30'
                                       : 'bg-white'
                                     return (
@@ -2213,21 +2254,12 @@ function AttendanceSheetSection({ departments }: { departments: Department[] }) 
                                           ) : <span className="text-gray-300">0</span>}
                                         </td>
                                         <td className="px-2 py-1 text-center font-mono text-green-700">{rec?.check_in ? rec.check_in.slice(0,5) : '—'}</td>
-                                        <td className="px-2 py-1 text-center font-mono text-yellow-700">{rec?.lunch_out ? rec.lunch_out.slice(0,5) : '—'}</td>
-                                        <td className="px-2 py-1 text-center font-mono text-yellow-700">{rec?.lunch_in  ? rec.lunch_in.slice(0,5)  : '—'}</td>
                                         <td className="px-2 py-1 text-center font-mono text-red-500">{rec?.check_out ? rec.check_out.slice(0,5) : '—'}</td>
                                         <td className="px-2 py-1 text-center">
                                           {isLateM ? (
                                             <span className="text-orange-600 font-semibold">+{rec.late_morning_mins} min</span>
                                           ) : rec?.check_in ? (
                                             <span className="text-green-600">On time</span>
-                                          ) : <span className="text-gray-300">—</span>}
-                                        </td>
-                                        <td className="px-2 py-1 text-center">
-                                          {isLateL ? (
-                                            <span className="text-purple-600 font-semibold">+{rec.late_lunch_mins} min</span>
-                                          ) : rec?.lunch_out && rec?.lunch_in ? (
-                                            <span className="text-green-600">OK</span>
                                           ) : <span className="text-gray-300">—</span>}
                                         </td>
                                         <td className="px-2 py-1 text-center">
