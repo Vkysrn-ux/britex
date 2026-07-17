@@ -1660,6 +1660,7 @@ function LeaveSection({ employees }: { employees: Employee[] }) {
   const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>([])
   const [statusFilter, setStatusFilter] = useState('pending')
   const [showForm, setShowForm] = useState(false)
+  const [editId, setEditId] = useState<number | null>(null)
   const [form, setForm] = useState({ employee_id: '', leave_type_id: '', start_date: '', end_date: '', reason: '' })
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
@@ -1689,24 +1690,56 @@ function LeaveSection({ employees }: { employees: Employee[] }) {
     }
   }
 
+  // Days excluding Sundays (factory works Saturdays) — matches server calculation
   const calcDays = (start: string, end: string) => {
-    if (!start || !end) return 0
-    const s = new Date(start), e = new Date(end)
-    return Math.max(1, Math.round((e.getTime() - s.getTime()) / 86400000) + 1)
+    if (!start || !end || end < start) return 0
+    const s = new Date(start + 'T00:00:00Z'), e = new Date(end + 'T00:00:00Z')
+    let n = 0
+    for (const d = new Date(s); d <= e; d.setUTCDate(d.getUTCDate() + 1)) {
+      if (d.getUTCDay() !== 0) n++
+    }
+    return n
+  }
+
+  const startEdit = (r: any) => {
+    setEditId(r.id)
+    setForm({
+      employee_id: String(r.employee_id), leave_type_id: String(r.leave_type_id),
+      start_date: String(r.start_date).slice(0, 10), end_date: String(r.end_date).slice(0, 10),
+      reason: r.reason || '',
+    })
+    setShowForm(true)
+  }
+
+  const handleDelete = async (r: any) => {
+    const note = r.status === 'approved' ? ' Its leave marks in attendance will also be removed.' : ''
+    if (!confirm(`Delete this leave request of ${r.employee_name}?${note}`)) return
+    try {
+      const res = await fetch(`/api/hr/leave/requests/${r.id}`, { method: 'DELETE' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setMsg({ text: 'Leave request deleted.', type: 'success' })
+      loadRequests()
+    } catch (err: any) { setMsg({ text: err.message, type: 'error' }) }
   }
 
   const handleSubmit = async (ev: React.FormEvent) => {
     ev.preventDefault(); setSaving(true); setMsg(null)
     try {
       const days = calcDays(form.start_date, form.end_date)
-      const res = await fetch('/api/hr/leave/requests', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, days, employee_id: Number(form.employee_id), leave_type_id: Number(form.leave_type_id) })
-      })
+      const res = editId
+        ? await fetch(`/api/hr/leave/requests/${editId}`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ leave_type_id: Number(form.leave_type_id), start_date: form.start_date, end_date: form.end_date, reason: form.reason })
+          })
+        : await fetch('/api/hr/leave/requests', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...form, days, employee_id: Number(form.employee_id), leave_type_id: Number(form.leave_type_id) })
+          })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
-      setMsg({ text: 'Leave request submitted.', type: 'success' })
-      setShowForm(false)
+      setMsg({ text: editId ? 'Leave request updated.' : 'Leave request submitted.', type: 'success' })
+      setShowForm(false); setEditId(null)
       setForm({ employee_id: '', leave_type_id: '', start_date: '', end_date: '', reason: '' })
       loadRequests()
     } catch (err: any) {
@@ -1718,7 +1751,7 @@ function LeaveSection({ employees }: { employees: Employee[] }) {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div><h2 className="text-xl font-bold text-gray-900">Leave Management</h2></div>
-        <Button onClick={() => setShowForm(s => !s)} className="bg-orange-600 hover:bg-orange-700 text-white">
+        <Button onClick={() => { setShowForm(s => !s); setEditId(null); setForm({ employee_id: '', leave_type_id: '', start_date: '', end_date: '', reason: '' }) }} className="bg-orange-600 hover:bg-orange-700 text-white">
           <Plus className="w-4 h-4 mr-2" />New Request
         </Button>
       </div>
@@ -1727,13 +1760,13 @@ function LeaveSection({ employees }: { employees: Employee[] }) {
 
       {showForm && (
         <Card className="border-orange-200">
-          <CardHeader className="pb-3"><CardTitle className="text-base">Submit Leave Request</CardTitle></CardHeader>
+          <CardHeader className="pb-3"><CardTitle className="text-base">{editId ? 'Edit Leave Request' : 'Submit Leave Request'}</CardTitle></CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="grid grid-cols-2 gap-3">
               <div><label className="text-xs font-medium text-gray-600">Employee*</label>
-                <select value={form.employee_id} onChange={e => setForm(f => ({ ...f, employee_id: e.target.value }))} required className="mt-1 w-full border rounded-md px-3 py-2 text-sm">
+                <select value={form.employee_id} onChange={e => setForm(f => ({ ...f, employee_id: e.target.value }))} required disabled={!!editId} className="mt-1 w-full border rounded-md px-3 py-2 text-sm disabled:bg-gray-50 disabled:text-gray-400">
                   <option value="">Select employee</option>
-                  {employees.filter(e => e.status === 'active').map(e => <option key={e.id} value={e.id}>{e.first_name} {e.last_name} ({e.employee_code})</option>)}
+                  {employees.filter(e => e.status === 'active' || String(e.id) === form.employee_id).map(e => <option key={e.id} value={e.id}>{e.first_name} {e.last_name} ({e.employee_code})</option>)}
                 </select></div>
               <div><label className="text-xs font-medium text-gray-600">Leave Type*</label>
                 <select value={form.leave_type_id} onChange={e => setForm(f => ({ ...f, leave_type_id: e.target.value }))} required className="mt-1 w-full border rounded-md px-3 py-2 text-sm">
@@ -1748,8 +1781,8 @@ function LeaveSection({ employees }: { employees: Employee[] }) {
               <div className="col-span-2"><label className="text-xs font-medium text-gray-600">Reason</label>
                 <textarea value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} rows={2} className="mt-1 w-full border rounded-md px-3 py-2 text-sm resize-none" /></div>
               <div className="col-span-2 flex gap-3">
-                <Button type="submit" disabled={saving} className="bg-orange-600 hover:bg-orange-700 text-white">{saving ? 'Submitting…' : 'Submit Request'}</Button>
-                <Button type="button" variant="outline" onClick={() => setShowForm(false)}>Cancel</Button>
+                <Button type="submit" disabled={saving} className="bg-orange-600 hover:bg-orange-700 text-white">{saving ? 'Saving…' : editId ? 'Save Changes' : 'Submit Request'}</Button>
+                <Button type="button" variant="outline" onClick={() => { setShowForm(false); setEditId(null) }}>Cancel</Button>
               </div>
             </form>
           </CardContent>
@@ -1791,12 +1824,16 @@ function LeaveSection({ employees }: { employees: Employee[] }) {
                   <td className="px-4 py-3 text-gray-500 max-w-xs truncate">{r.reason || '—'}</td>
                   <td className="px-4 py-3"><StatusBadge status={r.status} /></td>
                   <td className="px-4 py-3">
-                    {r.status === 'pending' && (
-                      <div className="flex gap-1">
-                        <Button size="sm" onClick={() => handleAction(r.id, 'approve')} className="h-7 px-2 bg-green-600 hover:bg-green-700 text-white text-xs">Approve</Button>
-                        <Button size="sm" onClick={() => handleAction(r.id, 'reject')} className="h-7 px-2 bg-red-500 hover:bg-red-600 text-white text-xs">Reject</Button>
-                      </div>
-                    )}
+                    <div className="flex gap-1">
+                      {r.status === 'pending' && (
+                        <>
+                          <Button size="sm" onClick={() => handleAction(r.id, 'approve')} className="h-7 px-2 bg-green-600 hover:bg-green-700 text-white text-xs">Approve</Button>
+                          <Button size="sm" onClick={() => handleAction(r.id, 'reject')} className="h-7 px-2 bg-red-500 hover:bg-red-600 text-white text-xs">Reject</Button>
+                          <Button size="sm" variant="outline" onClick={() => startEdit(r)} className="h-7 px-2 text-xs">Edit</Button>
+                        </>
+                      )}
+                      <Button size="sm" variant="outline" onClick={() => handleDelete(r)} className="h-7 px-2 text-xs text-red-500 hover:text-red-600 hover:bg-red-50">Delete</Button>
+                    </div>
                   </td>
                 </tr>
               ))}

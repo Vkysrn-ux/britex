@@ -41,14 +41,39 @@ export async function GET(req: Request) {
   }
 }
 
+function saneDate(s: string) {
+  const y = Number(s.slice(0, 4))
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) && y >= 2020 && y <= 2100
+}
+
+// Calendar days in range excluding Sundays (factory works Saturdays)
+function workingDays(start: string, end: string) {
+  const s = new Date(start + 'T00:00:00Z'), e = new Date(end + 'T00:00:00Z')
+  let n = 0
+  for (let d = new Date(s); d <= e; d.setUTCDate(d.getUTCDate() + 1)) {
+    if (d.getUTCDay() !== 0) n++
+  }
+  return n
+}
+
 export async function POST(req: Request) {
   try {
     const parsed = schema.parse(await req.json())
+    if (!saneDate(parsed.start_date) || !saneDate(parsed.end_date)) {
+      return NextResponse.json({ error: 'Invalid date (check the year)' }, { status: 400 })
+    }
+    if (parsed.end_date < parsed.start_date) {
+      return NextResponse.json({ error: 'End date is before start date' }, { status: 400 })
+    }
+    const days = workingDays(parsed.start_date, parsed.end_date)
+    if (days > 366) {
+      return NextResponse.json({ error: 'Leave longer than a year — check the dates' }, { status: 400 })
+    }
     const db = getDb()
     const [result] = await db.execute(
       `INSERT INTO hr_leave_requests (employee_id, leave_type_id, start_date, end_date, days, reason)
        VALUES (:employee_id, :leave_type_id, :start_date, :end_date, :days, :reason)`,
-      { ...parsed, reason: parsed.reason ?? null }
+      { ...parsed, days, reason: parsed.reason ?? null }
     )
     return NextResponse.json({ success: true, id: (result as any).insertId }, { status: 201 })
   } catch (err: any) {
