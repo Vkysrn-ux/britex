@@ -1284,6 +1284,11 @@ function AttendanceSection() {
   const [loading, setLoading]   = useState(false)
   const [departments, setDepts] = useState<Department[]>([])
   const [view, setView]         = useState<'list' | 'import' | 'mark'>('list')
+  const [editRow, setEditRow]   = useState<any>(null)
+  const [editIn, setEditIn]     = useState('')
+  const [editOut, setEditOut]   = useState('')
+  const [editNote, setEditNote] = useState('')
+  const [savingEdit, setSavingEdit] = useState(false)
   const [msg, setMsg]           = useState<{ text: string; type: 'success'|'error' } | null>(null)
   const [sortCol, setSortCol]   = useState<'employee_code' | 'name' | null>(null)
   const [sortDir, setSortDir]   = useState<'asc' | 'desc'>('asc')
@@ -1498,6 +1503,7 @@ function AttendanceSection() {
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">HRS</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">PUNCHES</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">STATUS</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1524,6 +1530,15 @@ function AttendanceSection() {
                             <span className="text-gray-300">—</span>
                           )}
                         </td>
+                        <td className="px-4 py-3">
+                          <Button size="sm" variant="outline" className="h-7 px-2 text-xs"
+                            onClick={() => {
+                              setEditRow(emp)
+                              setEditIn(emp.check_in ? String(emp.check_in).slice(0, 5) : '')
+                              setEditOut(emp.check_out ? String(emp.check_out).slice(0, 5) : '')
+                              setEditNote('')
+                            }}>Edit</Button>
+                        </td>
                       </tr>
                     )
                   })}
@@ -1531,6 +1546,56 @@ function AttendanceSection() {
               </table>
             </div>
           </div>
+
+          {/* Manual punch correction modal */}
+          {editRow && (
+            <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30" onClick={() => setEditRow(null)}>
+              <div className="bg-white rounded-2xl shadow-xl w-96 p-6 space-y-4" onClick={e => e.stopPropagation()}>
+                <div>
+                  <h3 className="font-bold text-gray-900">Correct Punches — {editRow.name}</h3>
+                  <p className="text-xs text-gray-500">{editRow.employee_code} · {fmtDate(date)}</p>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 block">Check-In</label>
+                    <Input type="time" value={editIn} onChange={e => setEditIn(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 block">Check-Out</label>
+                    <Input type="time" value={editOut} onChange={e => setEditOut(e.target.value)} />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 block">Reason / Note</label>
+                  <Input value={editNote} onChange={e => setEditNote(e.target.value)} placeholder="e.g. forgot to punch out" />
+                </div>
+                <p className="text-xs text-gray-400">Status (Present / Late / Half Day) is calculated automatically from the times.</p>
+                <div className="flex gap-2 justify-end">
+                  <Button variant="outline" size="sm" onClick={() => setEditRow(null)}>Cancel</Button>
+                  <Button size="sm" disabled={savingEdit || !editIn} className="bg-orange-600 hover:bg-orange-700 text-white"
+                    onClick={async () => {
+                      setSavingEdit(true)
+                      try {
+                        const res = await fetch('/api/hr/attendance', {
+                          method: 'POST', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            employee_id: editRow.id, date,
+                            check_in: editIn ? editIn + ':00' : null,
+                            check_out: editOut ? editOut + ':00' : null,
+                            notes: editNote ? 'Manual: ' + editNote : 'Manual correction',
+                          }),
+                        })
+                        if (!res.ok) throw new Error((await res.json()).error)
+                        setEditRow(null); load()
+                      } catch (err: any) { alert(err.message) }
+                      finally { setSavingEdit(false) }
+                    }}>
+                    {savingEdit ? 'Saving…' : 'Save'}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
         </>
       )}
 

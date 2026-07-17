@@ -8,9 +8,21 @@ const markSchema = z.object({
   date: z.string().min(1),
   check_in: z.string().optional().nullable(),
   check_out: z.string().optional().nullable(),
-  status: z.enum(['present', 'absent', 'half_day', 'late', 'on_leave']).default('present'),
+  status: z.enum(['present', 'absent', 'half_day', 'late', 'on_leave']).optional(),
   notes: z.string().optional().nullable(),
 })
+
+// Same rules as the biometric listener: 09:00 + 10 min grace, under 4 hrs = half day
+const SHIFT_START_MINS = 9 * 60, GRACE = 10
+const toMins = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5))
+function computeStatus(check_in?: string | null, check_out?: string | null) {
+  if (!check_in) return { status: 'absent' as const, late: 0 }
+  const late = Math.max(0, toMins(check_in) - (SHIFT_START_MINS + GRACE))
+  if (check_in && check_out && toMins(check_out) - toMins(check_in) < 240) {
+    return { status: 'half_day' as const, late }
+  }
+  return { status: late > 0 ? 'late' as const : 'present' as const, late }
+}
 
 const bulkSchema = z.object({
   date: z.string().min(1),
@@ -83,19 +95,25 @@ export async function POST(req: Request) {
     }
 
     const parsed = markSchema.parse(body)
+    // Status not given -> compute from the times (late / half-day / present / absent)
+    const auto = computeStatus(parsed.check_in, parsed.check_out)
+    const status = parsed.status ?? auto.status
+    const punchCount = (parsed.check_in ? 1 : 0) + (parsed.check_out ? 1 : 0)
     await db.execute(
-      `INSERT INTO hr_attendance (employee_id, date, check_in, check_out, status, notes)
-       VALUES (:employee_id, :date, :check_in, :check_out, :status, :notes)
+      `INSERT INTO hr_attendance (employee_id, date, check_in, check_out, status, notes, punch_count, late_morning_mins)
+       VALUES (:employee_id, :date, :check_in, :check_out, :status, :notes, :punch_count, :late)
        ON CONFLICT (employee_id, date) DO UPDATE
          SET status = EXCLUDED.status,
              check_in = EXCLUDED.check_in,
              check_out = EXCLUDED.check_out,
-             notes = EXCLUDED.notes`,
+             notes = EXCLUDED.notes,
+             punch_count = EXCLUDED.punch_count,
+             late_morning_mins = EXCLUDED.late_morning_mins`,
       { employee_id: parsed.employee_id, date: parsed.date,
         check_in: parsed.check_in ?? null, check_out: parsed.check_out ?? null,
-        status: parsed.status, notes: parsed.notes ?? null }
+        status, notes: parsed.notes ?? null, punch_count: punchCount, late: auto.late }
     )
-    return NextResponse.json({ success: true })
+    return NextResponse.json({ success: true, status })
   } catch (err: any) {
     if (err?.name === 'ZodError') return NextResponse.json({ error: 'Validation failed', issues: err.issues }, { status: 400 })
     console.error('POST hr/attendance error', err)
