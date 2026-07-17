@@ -1258,11 +1258,11 @@ function fmtTime(t: string | null): string {
   return `${String(h12).padStart(2,'0')}:${String(m).padStart(2,'0')} ${ampm}`
 }
 
+// Payroll works in round figures — show hours rounded to the nearest half hour
 function fmtWH(hours: number): string {
-  if (!hours || hours <= 0) return '00h 00m'
-  const h = Math.floor(hours)
-  const m = Math.round((hours - h) * 60)
-  return `${String(h).padStart(2,'0')}h ${String(m).padStart(2,'0')}m`
+  if (!hours || hours <= 0) return '0 hr'
+  const rounded = Math.round(hours * 2) / 2
+  return `${rounded % 1 === 0 ? rounded : rounded.toFixed(1)} hr`
 }
 
 const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
