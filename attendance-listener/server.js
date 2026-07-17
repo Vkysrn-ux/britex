@@ -6,6 +6,7 @@ const PORT          = process.env.PORT          || 8085
 const DEVICE_PREFIX = process.env.DEVICE_PREFIX || 'BT'
 const SHIFT_START   = process.env.SHIFT_START   || '09:00'
 const GRACE_MINS    = parseInt(process.env.GRACE_MINS || '10')
+const DEBOUNCE_MINS = parseInt(process.env.DEBOUNCE_MINS || '3')
 
 const pool = new Pool({
   host:     process.env.DB_HOST     || 'postgres-db',
@@ -248,6 +249,16 @@ async function handleAttlog(req, res, sn) {
         // Ignore duplicate re-sends of punches we already have
         if (punchTime === (att.check_in || '').slice(0,8) || punchTime === (att.check_out || '').slice(0,8)) {
           log('  DUP       PIN=' + pin + ' ' + punchTime + ' (ignored)')
+          saved++; continue
+        }
+
+        // Debounce accidental double-taps: ignore punches within a few minutes
+        // of the recorded check-in or check-out (real entry/exit are hours apart)
+        var punchM = toMins(punchTime.slice(0,5))
+        var nearIn  = att.check_in  && Math.abs(punchM - toMins(att.check_in.slice(0,5)))  <= DEBOUNCE_MINS
+        var nearOut = att.check_out && Math.abs(punchM - toMins(att.check_out.slice(0,5))) <= DEBOUNCE_MINS
+        if (nearIn || nearOut) {
+          log('  DEBOUNCE  PIN=' + pin + ' ' + punchTime + ' (within ' + DEBOUNCE_MINS + 'min of previous punch, ignored)')
           saved++; continue
         }
 
