@@ -1655,6 +1655,60 @@ function AttendanceSection() {
 
 // ─── Leave Management ─────────────────────────────────────────────────────────
 
+// Searchable employee picker — type name or BT number to filter
+function EmployeeSearchSelect({
+  employees, value, onChange, disabled, required,
+}: {
+  employees: Employee[]; value: string; onChange: (id: string) => void; disabled?: boolean; required?: boolean
+}) {
+  const [query, setQuery] = useState('')
+  const [open, setOpen] = useState(false)
+
+  const selected = employees.find(e => String(e.id) === value)
+  const label = selected ? `${selected.first_name} ${selected.last_name || ''} (${selected.employee_code})`.replace(/\s+/g, ' ') : ''
+
+  const q = query.trim().toLowerCase()
+  const filtered = employees
+    .filter(e => e.status === 'active' || String(e.id) === value)
+    .filter(e => !q ||
+      `${e.first_name} ${e.last_name || ''}`.toLowerCase().includes(q) ||
+      (e.employee_code || '').toLowerCase().includes(q) ||
+      (e.employee_code || '').toLowerCase().replace('bt-', '').includes(q))
+    .slice(0, 30)
+
+  return (
+    <div className="relative">
+      <Input
+        value={open ? query : label}
+        placeholder="Type name or BT number…"
+        disabled={disabled}
+        required={required && !value}
+        onFocus={() => { setQuery(''); setOpen(true) }}
+        onChange={e => { setQuery(e.target.value); setOpen(true) }}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        className="mt-1"
+      />
+      {open && !disabled && (
+        <div className="absolute z-30 mt-1 w-full max-h-56 overflow-y-auto bg-white border border-orange-200 rounded-md shadow-lg">
+          {filtered.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-gray-400">No employee found</div>
+          ) : filtered.map(e => (
+            <button
+              key={e.id}
+              type="button"
+              onMouseDown={ev => ev.preventDefault()}
+              onClick={() => { onChange(String(e.id)); setOpen(false) }}
+              className={`w-full text-left px-3 py-2 text-sm hover:bg-orange-50 ${String(e.id) === value ? 'bg-orange-50 font-semibold' : ''}`}
+            >
+              {e.first_name} {e.last_name || ''} <span className="text-xs text-gray-400 font-mono">({e.employee_code})</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function LeaveSection({ employees }: { employees: Employee[] }) {
   const [requests, setRequests] = useState<LeaveRequest[]>([])
   const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>([])
@@ -1764,10 +1818,13 @@ function LeaveSection({ employees }: { employees: Employee[] }) {
           <CardContent>
             <form onSubmit={handleSubmit} className="grid grid-cols-2 gap-3">
               <div><label className="text-xs font-medium text-gray-600">Employee*</label>
-                <select value={form.employee_id} onChange={e => setForm(f => ({ ...f, employee_id: e.target.value }))} required disabled={!!editId} className="mt-1 w-full border rounded-md px-3 py-2 text-sm disabled:bg-gray-50 disabled:text-gray-400">
-                  <option value="">Select employee</option>
-                  {employees.filter(e => e.status === 'active' || String(e.id) === form.employee_id).map(e => <option key={e.id} value={e.id}>{e.first_name} {e.last_name} ({e.employee_code})</option>)}
-                </select></div>
+                <EmployeeSearchSelect
+                  employees={employees}
+                  value={form.employee_id}
+                  onChange={id => setForm(f => ({ ...f, employee_id: id }))}
+                  disabled={!!editId}
+                  required
+                /></div>
               <div><label className="text-xs font-medium text-gray-600">Leave Type*</label>
                 <select value={form.leave_type_id} onChange={e => setForm(f => ({ ...f, leave_type_id: e.target.value }))} required className="mt-1 w-full border rounded-md px-3 py-2 text-sm">
                   <option value="">Select type</option>
