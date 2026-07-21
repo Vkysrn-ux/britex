@@ -3,15 +3,18 @@ export const runtime = 'nodejs'
 import { z } from 'zod'
 import { getDb } from '@/lib/db'
 
+// Blank input fields ('') from the edit form mean "not set" -> treat as null
+const emptyToNull = (v: unknown) => (v === '' ? null : v)
+
 const updateSchema = z.object({
   first_name:        z.string().min(1).optional(),
   last_name:         z.string().optional().nullable(),
-  email:             z.string().email().optional().nullable(),
+  email:             z.preprocess(emptyToNull, z.string().email().optional().nullable()),
   phone:             z.string().optional().nullable(),
-  gender:            z.enum(['male', 'female', 'other']).optional().nullable(),
-  date_of_birth:     z.string().optional().nullable(),
+  gender:            z.preprocess(emptyToNull, z.enum(['male', 'female', 'other']).optional().nullable()),
+  date_of_birth:     z.preprocess(emptyToNull, z.string().optional().nullable()),
   date_of_joining:   z.string().optional(),
-  department_id:     z.coerce.number().int().optional().nullable(),
+  department_id:     z.preprocess(emptyToNull, z.coerce.number().int().optional().nullable()),
   job_title:         z.string().optional().nullable(),
   employment_type:   z.enum(['full_time', 'part_time', 'contract', 'intern']).optional(),
   basic_salary:      z.coerce.number().min(0).optional(),
