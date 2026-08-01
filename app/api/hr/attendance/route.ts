@@ -99,16 +99,22 @@ export async function POST(req: Request) {
     const auto = computeStatus(parsed.check_in, parsed.check_out)
     const status = parsed.status ?? auto.status
     const punchCount = (parsed.check_in ? 1 : 0) + (parsed.check_out ? 1 : 0)
+    // Manual entry replaces whatever punches existed — clear the auto-detected
+    // permission/review flags so payroll relies only on the times given here.
+    await db.execute('DELETE FROM hr_punches WHERE employee_id = :employee_id AND date = :date',
+      { employee_id: parsed.employee_id, date: parsed.date })
     await db.execute(
-      `INSERT INTO hr_attendance (employee_id, date, check_in, check_out, status, notes, punch_count, late_morning_mins)
-       VALUES (:employee_id, :date, :check_in, :check_out, :status, :notes, :punch_count, :late)
+      `INSERT INTO hr_attendance (employee_id, date, check_in, check_out, status, notes, punch_count, late_morning_mins, permission_minutes, needs_review)
+       VALUES (:employee_id, :date, :check_in, :check_out, :status, :notes, :punch_count, :late, 0, false)
        ON CONFLICT (employee_id, date) DO UPDATE
          SET status = EXCLUDED.status,
              check_in = EXCLUDED.check_in,
              check_out = EXCLUDED.check_out,
              notes = EXCLUDED.notes,
              punch_count = EXCLUDED.punch_count,
-             late_morning_mins = EXCLUDED.late_morning_mins`,
+             late_morning_mins = EXCLUDED.late_morning_mins,
+             permission_minutes = 0,
+             needs_review = false`,
       { employee_id: parsed.employee_id, date: parsed.date,
         check_in: parsed.check_in ?? null, check_out: parsed.check_out ?? null,
         status, notes: parsed.notes ?? null, punch_count: punchCount, late: auto.late }

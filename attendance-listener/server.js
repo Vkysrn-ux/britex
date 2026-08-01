@@ -200,6 +200,39 @@ async function handleOperlog(req, res, sn) {
   res.send('OK')
 }
 
+var LUNCH_MINS = parseInt(process.env.LUNCH_MINS || '30')
+
+// Recompute a day's check_in/check_out/permission/status from every stored
+// punch (ascending). Punch pattern:
+//   2 punches:  in -> out                         (no permission)
+//   4 punches:  in -> [perm-out -> perm-in] -> out
+//   6 punches:  in -> [perm-out->perm-in] x2 -> out
+// Odd counts (3,5,...) can't be paired cleanly -> flagged needs_review so
+// the office corrects it via the manual punch-edit screen.
+function computeDay(times, lateBase) {
+  var n = times.length
+  var checkIn = times[0], checkOut = times[n - 1]
+  var lateMins = morningLateMins(checkIn)
+
+  if (n === 1) {
+    return { check_in: checkIn, check_out: null, punch_count: 1, permission_minutes: 0,
+             needs_review: false, status: lateMins > 0 ? 'late' : 'present', late_morning_mins: lateMins }
+  }
+
+  var needsReview = (n % 2 === 1) && n > 1
+  var permissionMins = 0
+  // Pair up interior punches: (times[1],times[2]), (times[3],times[4]), ...
+  for (var i = 1; i + 1 <= n - 2; i += 2) {
+    permissionMins += toMins(times[i + 1]) - toMins(times[i])
+  }
+  var spanMins = toMins(checkOut) - toMins(checkIn)
+  var workedMins = spanMins - permissionMins - LUNCH_MINS
+  var status = workedMins < 240 ? 'half_day' : (lateMins > 0 ? 'late' : 'present')
+
+  return { check_in: checkIn, check_out: checkOut, punch_count: n, permission_minutes: Math.max(0, permissionMins),
+           needs_review: needsReview, status: status, late_morning_mins: lateMins }
+}
+
 async function handleAttlog(req, res, sn) {
   var body  = typeof req.body === 'string' ? req.body : ''
   var lines = body.split(/\r?\n/).map(function(l) { return l.trim() }).filter(Boolean)
@@ -229,56 +262,41 @@ async function handleAttlog(req, res, sn) {
       }
       var empId     = empRes.rows[0].id
       var punchTime = timeStr.slice(0, 8)
+      var punchM    = toMins(punchTime.slice(0,5))
 
-      var attRes = await pool.query(
-        'SELECT id,check_in,check_out,lunch_out,lunch_in,punch_count,late_morning_mins FROM hr_attendance WHERE employee_id=$1 AND date=$2',
+      // Existing punches for this employee/day
+      var existing = await pool.query(
+        'SELECT punch_time FROM hr_punches WHERE employee_id=$1 AND date=$2 ORDER BY punch_time',
         [empId, dateStr]
       )
+      var times = existing.rows.map(function(r) { return r.punch_time.slice(0,8) })
 
-      if (attRes.rows.length === 0) {
-        var lateMins = morningLateMins(punchTime)
-        await pool.query(
-          'INSERT INTO hr_attendance(employee_id,date,check_in,punch_count,status,late_morning_mins) VALUES($1,$2,$3,1,$4,$5)',
-          [empId, dateStr, punchTime, lateMins > 0 ? 'late' : 'present', lateMins]
-        )
-        log('  CHECK-IN  PIN=' + pin + ' ' + dateStr + ' ' + punchTime + (lateMins > 0 ? ' LATE+' + lateMins + 'm' : ''))
-      } else {
-        // Two-punch model: first punch = check_in, latest punch = check_out.
-        var att = attRes.rows[0]
-
-        // Ignore duplicate re-sends of punches we already have
-        if (punchTime === (att.check_in || '').slice(0,8) || punchTime === (att.check_out || '').slice(0,8)) {
-          log('  DUP       PIN=' + pin + ' ' + punchTime + ' (ignored)')
-          saved++; continue
-        }
-
-        // Debounce accidental double-taps: ignore punches within a few minutes
-        // of the recorded check-in or check-out (real entry/exit are hours apart)
-        var punchM = toMins(punchTime.slice(0,5))
-        var nearIn  = att.check_in  && Math.abs(punchM - toMins(att.check_in.slice(0,5)))  <= DEBOUNCE_MINS
-        var nearOut = att.check_out && Math.abs(punchM - toMins(att.check_out.slice(0,5))) <= DEBOUNCE_MINS
-        if (nearIn || nearOut) {
-          log('  DEBOUNCE  PIN=' + pin + ' ' + punchTime + ' (within ' + DEBOUNCE_MINS + 'min of previous punch, ignored)')
-          saved++; continue
-        }
-
-        var newCount = (att.punch_count || 1) + 1
-        var checkOut = att.check_out
-        // Latest punch of the day wins as check_out
-        if (!checkOut || punchTime > checkOut.slice(0,8)) checkOut = punchTime
-        log('  CHECK-OUT PIN=' + pin + ' ' + punchTime)
-
-        var lmm = att.late_morning_mins || morningLateMins((att.check_in || '00:00:00').slice(0,8))
-
-        // Half day: less than 4 hours between check-in and check-out
-        var workedMins = toMins(checkOut.slice(0,5)) - toMins((att.check_in || checkOut).slice(0,5))
-        var status = workedMins < 240 ? 'half_day' : (lmm > 0 ? 'late' : 'present')
-
-        await pool.query(
-          'UPDATE hr_attendance SET check_out=$1,punch_count=$2,late_morning_mins=$3,status=$4 WHERE id=$5',
-          [checkOut, newCount, lmm, status, att.id]
-        )
+      // Ignore exact duplicate re-sends and accidental double-taps within DEBOUNCE_MINS
+      if (times.some(function(t) { return Math.abs(punchM - toMins(t.slice(0,5))) <= DEBOUNCE_MINS })) {
+        log('  DEBOUNCE  PIN=' + pin + ' ' + punchTime + ' (within ' + DEBOUNCE_MINS + 'min of an existing punch, ignored)')
+        saved++; continue
       }
+
+      await pool.query(
+        'INSERT INTO hr_punches(employee_id,date,punch_time) VALUES($1,$2,$3)',
+        [empId, dateStr, punchTime]
+      )
+      times.push(punchTime)
+      times.sort()
+
+      var day = computeDay(times)
+      await pool.query(
+        `INSERT INTO hr_attendance(employee_id,date,check_in,check_out,punch_count,status,late_morning_mins,permission_minutes,needs_review)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         ON CONFLICT (employee_id,date) DO UPDATE SET
+           check_in=$3, check_out=$4, punch_count=$5, status=$6,
+           late_morning_mins=$7, permission_minutes=$8, needs_review=$9`,
+        [empId, dateStr, day.check_in, day.check_out, day.punch_count, day.status,
+         day.late_morning_mins, day.permission_minutes, day.needs_review]
+      )
+      log('  PUNCH PIN=' + pin + ' ' + dateStr + ' ' + punchTime +
+          ' (#' + day.punch_count + ', perm=' + day.permission_minutes + 'm, status=' + day.status +
+          (day.needs_review ? ', NEEDS REVIEW (odd punch count)' : '') + ')')
       saved++
     } catch (err) {
       log('  Error: ' + err.message)

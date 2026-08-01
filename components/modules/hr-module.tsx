@@ -247,7 +247,10 @@ function EmployeeProfilePage({
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form)
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
+      if (!res.ok) {
+        const detail = data.issues?.map((i: any) => `${i.path.join('.')}: ${i.message}`).join('; ')
+        throw new Error(detail ? `${data.error} — ${detail}` : data.error)
+      }
       setEmp(data.data); setEditing(false)
       setMsg({ text: 'Employee updated successfully.', type: 'success' })
       onReload()
@@ -539,23 +542,20 @@ function EmployeeProfilePage({
 function EmployeePayrollTab({ emp, onEmpUpdate }: { emp: any; onEmpUpdate: (e: any) => void }) {
   const today = new Date()
   const [dayRate, setDayRate] = useState(String(emp.day_rate ?? 0))
-  const [esiAmount, setEsiAmount] = useState(String(emp.esi_amount ?? 0))
   const [month, setMonth] = useState(today.getMonth() + 1)
   const [year, setYear] = useState(today.getFullYear())
   const [advance, setAdvance] = useState('0')
-  const [permHours, setPermHours] = useState('0')
-  const [esiOverride, setEsiOverride] = useState('0')
+  const [permOverride, setPermOverride] = useState('0')
+  const [othersDeduction, setOthersDeduction] = useState('0')
+  const [autoPermHours, setAutoPermHours] = useState(0)
   const [history, setHistory] = useState<any[]>([])
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
 
-  // Load fresh salary settings (directory list rows don't carry day_rate/esi_amount)
+  // Load fresh salary settings (directory list rows don't carry day_rate)
   useEffect(() => {
     fetch(`/api/hr/employees/${emp.id}`).then(r => r.json()).then(d => {
-      if (d.data) {
-        setDayRate(String(Number(d.data.day_rate) || 0))
-        setEsiAmount(String(Number(d.data.esi_amount) || 0))
-      }
+      if (d.data) setDayRate(String(Number(d.data.day_rate) || 0))
     })
   }, [emp.id])
 
@@ -564,8 +564,13 @@ function EmployeePayrollTab({ emp, onEmpUpdate }: { emp: any; onEmpUpdate: (e: a
     fetch(`/api/hr/payroll/inputs?month=${month}&year=${year}`).then(r => r.json()).then(d => {
       const row = (d.data || []).find((r: any) => Number(r.employee_id) === Number(emp.id))
       setAdvance(String(Number(row?.advance) || 0))
-      setPermHours(String(Number(row?.permission_hours) || 0))
-      setEsiOverride(String(Number(row?.esi) || 0))
+      setPermOverride(String(Number(row?.permission_hours) || 0))
+      setOthersDeduction(String(Number(row?.others_deduction) || 0))
+    })
+    fetch(`/api/hr/payroll/history?employee_id=${emp.id}`).then(r => r.json()).then(d => {
+      const rows = d.data || []
+      const thisMonth = rows.find((h: any) => Number(h.month) === month && Number(h.year) === year)
+      setAutoPermHours(Number(thisMonth?.permission_auto_hours) || 0)
     })
   }, [month, year, emp.id])
   useEffect(() => {
@@ -577,7 +582,7 @@ function EmployeePayrollTab({ emp, onEmpUpdate }: { emp: any; onEmpUpdate: (e: a
     try {
       const res = await fetch(`/api/hr/employees/${emp.id}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ day_rate: Number(dayRate) || 0, esi_amount: Number(esiAmount) || 0 }),
+        body: JSON.stringify({ day_rate: Number(dayRate) || 0 }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
@@ -594,7 +599,7 @@ function EmployeePayrollTab({ emp, onEmpUpdate }: { emp: any; onEmpUpdate: (e: a
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ month, year, entries: [{
           employee_id: emp.id, advance: Number(advance) || 0,
-          permission_hours: Number(permHours) || 0, esi: Number(esiOverride) || 0,
+          permission_hours: Number(permOverride) || 0, others_deduction: Number(othersDeduction) || 0,
         }] }),
       })
       const data = await res.json()
@@ -605,6 +610,7 @@ function EmployeePayrollTab({ emp, onEmpUpdate }: { emp: any; onEmpUpdate: (e: a
   }
 
   const hourRate = (Number(dayRate) || 0) / 8
+  const effectivePermHours = Number(permOverride) > 0 ? Number(permOverride) : autoPermHours
 
   return (
     <div className="space-y-4">
@@ -619,11 +625,7 @@ function EmployeePayrollTab({ emp, onEmpUpdate }: { emp: any; onEmpUpdate: (e: a
             <Input type="number" min="0" value={dayRate} onChange={e => setDayRate(e.target.value)} />
             <p className="text-xs text-gray-400 mt-1">1 hour = ₹{hourRate.toFixed(2)} (day ÷ 8) — used for permission deduction</p>
           </div>
-          <div>
-            <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 block">ESI per month (₹)</label>
-            <Input type="number" min="0" value={esiAmount} onChange={e => setEsiAmount(e.target.value)} />
-            <p className="text-xs text-gray-400 mt-1">Deducted every month automatically. 0 = no ESI.</p>
-          </div>
+          <p className="text-xs text-gray-400">ESI (0.75%) and PF (12% of Basic+DA) are calculated automatically every month — nothing to set here.</p>
           <Button onClick={saveSettings} disabled={saving} className="bg-orange-600 hover:bg-orange-700 text-white">
             {saving ? 'Saving…' : 'Save Settings'}
           </Button>
@@ -645,13 +647,13 @@ function EmployeePayrollTab({ emp, onEmpUpdate }: { emp: any; onEmpUpdate: (e: a
             <Input type="number" min="0" value={advance} onChange={e => setAdvance(e.target.value)} />
           </div>
           <div>
-            <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 block">Permission (hours)</label>
-            <Input type="number" min="0" step="0.5" value={permHours} onChange={e => setPermHours(e.target.value)} />
-            <p className="text-xs text-gray-400 mt-1">Deduction: {permHours || 0} × ₹{hourRate.toFixed(2)} = ₹{((Number(permHours) || 0) * hourRate).toFixed(2)}</p>
+            <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 block">Permission — auto-detected from punches: {autoPermHours.toFixed(2)} hr</label>
+            <Input type="number" min="0" step="0.25" value={permOverride} onChange={e => setPermOverride(e.target.value)} placeholder="Override (0 = use auto)" />
+            <p className="text-xs text-gray-400 mt-1">Using {effectivePermHours.toFixed(2)} hr → deduction ₹{(effectivePermHours * hourRate).toFixed(2)}</p>
           </div>
           <div>
-            <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 block">ESI override for this month (₹, 0 = use default)</label>
-            <Input type="number" min="0" value={esiOverride} onChange={e => setEsiOverride(e.target.value)} />
+            <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1 block">Others (uniform, extra deduction, ₹)</label>
+            <Input type="number" min="0" value={othersDeduction} onChange={e => setOthersDeduction(e.target.value)} />
           </div>
           <Button onClick={saveMonthInputs} disabled={saving} className="bg-blue-600 hover:bg-blue-700 text-white">
             {saving ? 'Saving…' : `Save for ${MONTHS[month-1]}`}
@@ -673,12 +675,13 @@ function EmployeePayrollTab({ emp, onEmpUpdate }: { emp: any; onEmpUpdate: (e: a
                   <th className="px-3 py-2 text-right font-semibold text-gray-600">Rate</th>
                   <th className="px-3 py-2 text-center font-semibold text-green-700">Present</th>
                   <th className="px-3 py-2 text-center font-semibold text-yellow-700">Half</th>
-                  <th className="px-3 py-2 text-center font-semibold text-orange-500">Sun</th>
-                  <th className="px-3 py-2 text-right font-semibold text-gray-600">Working ₹</th>
+                  <th className="px-3 py-2 text-right font-semibold text-gray-600">Total</th>
                   <th className="px-3 py-2 text-right font-semibold text-green-700">Incentive</th>
                   <th className="px-3 py-2 text-right font-semibold text-red-500">ESI</th>
+                  <th className="px-3 py-2 text-right font-semibold text-red-500">PF</th>
                   <th className="px-3 py-2 text-right font-semibold text-red-500">Advance</th>
                   <th className="px-3 py-2 text-right font-semibold text-red-500">Permission</th>
+                  <th className="px-3 py-2 text-right font-semibold text-red-500">Others</th>
                   <th className="px-3 py-2 text-right font-semibold text-gray-900">Net</th>
                   <th className="px-3 py-2 text-center font-semibold text-gray-600">Status</th>
                 </tr>
@@ -690,12 +693,13 @@ function EmployeePayrollTab({ emp, onEmpUpdate }: { emp: any; onEmpUpdate: (e: a
                     <td className="px-3 py-2 text-right font-mono">{Number(h.day_rate)}</td>
                     <td className="px-3 py-2 text-center text-green-700 font-semibold">{h.present_days}/{h.working_days}</td>
                     <td className="px-3 py-2 text-center">{Number(h.half_days) || '—'}</td>
-                    <td className="px-3 py-2 text-center">{Number(h.sunday_days) || '—'}</td>
                     <td className="px-3 py-2 text-right font-mono">{fmt(h.working_salary)}</td>
                     <td className="px-3 py-2 text-right font-mono text-green-700">{Number(h.incentive) ? fmt(h.incentive) : '—'}</td>
                     <td className="px-3 py-2 text-right font-mono text-red-500">{Number(h.esi) ? fmt(h.esi) : '—'}</td>
+                    <td className="px-3 py-2 text-right font-mono text-red-500">{Number(h.pf) ? fmt(h.pf) : '—'}</td>
                     <td className="px-3 py-2 text-right font-mono text-red-500">{Number(h.advance) ? fmt(h.advance) : '—'}</td>
                     <td className="px-3 py-2 text-right font-mono text-red-500">{Number(h.permission_amount) ? fmt(h.permission_amount) : '—'}</td>
+                    <td className="px-3 py-2 text-right font-mono text-red-500">{Number(h.others_deduction) ? fmt(h.others_deduction) : '—'}</td>
                     <td className="px-3 py-2 text-right font-mono font-bold">{fmt(h.net_salary)}</td>
                     <td className="px-3 py-2 text-center"><StatusBadge status={h.payroll_status} /></td>
                   </tr>
@@ -1522,7 +1526,19 @@ function AttendanceSection() {
                         <td className="px-4 py-3 font-semibold text-green-600 font-mono text-xs">{fmtTime(emp.check_in)}</td>
                         <td className="px-4 py-3 font-semibold text-red-500 font-mono text-xs">{fmtTime(emp.check_out)}</td>
                         <td className="px-4 py-3 text-gray-700 font-mono text-xs">{wh > 0 ? fmtWH(wh) : <span className="text-gray-300">—</span>}</td>
-                        <td className="px-4 py-3 text-center text-xs font-mono text-gray-500">{emp.punch_count ?? '—'}</td>
+                        <td className="px-4 py-3 text-center text-xs font-mono text-gray-500">
+                          {emp.punch_count ?? '—'}
+                          {emp.needs_review && (
+                            <span className="ml-1 inline-block px-1.5 py-0.5 rounded bg-red-100 text-red-600 text-[10px] font-bold align-middle" title="Odd number of punches — permission time couldn't be auto-detected. Check and correct manually.">
+                              !
+                            </span>
+                          )}
+                          {!emp.needs_review && Number(emp.permission_minutes) > 0 && (
+                            <span className="ml-1 text-[10px] text-blue-600 align-middle" title="Permission time detected from punches">
+                              ({emp.permission_minutes}m perm)
+                            </span>
+                          )}
+                        </td>
                         <td className="px-4 py-3">
                           {badge ? (
                             <span className={`inline-block px-2.5 py-1 rounded-full text-xs font-semibold border ${badge.cls}`}>{badge.label}</span>
@@ -1986,8 +2002,16 @@ function PayrollSection() {
     const found = (d.data || []).find((p: any) => Number(p.month) === month && Number(p.year) === year) || null
     setRun(found)
     if (found) {
-      const it = await fetch(`/api/hr/payroll/${found.id}/items`).then(r => r.json())
-      setItems(it.data || [])
+      const [it, inputs] = await Promise.all([
+        fetch(`/api/hr/payroll/${found.id}/items`).then(r => r.json()),
+        fetch(`/api/hr/payroll/inputs?month=${month}&year=${year}`).then(r => r.json()),
+      ])
+      const inputMap = new Map((inputs.data || []).map((r: any) => [Number(r.employee_id), r]))
+      const merged = (it.data || []).map((row: any) => {
+        const inp: any = inputMap.get(Number(row.employee_id)) || {}
+        return { ...row, permission_override: Number(inp.permission_hours) || 0, others_input: Number(inp.others_deduction) || 0 }
+      })
+      setItems(merged)
     } else setItems([])
     setDirty(false)
   }, [month, year])
@@ -2014,7 +2038,7 @@ function PayrollSection() {
     finally { setBusy(false) }
   }
 
-  // Save edited advance/permission/ESI, then recompute
+  // Save edited advance/permission override/others, then recompute
   const saveAndRecalc = async () => {
     if (!run) return
     setBusy(true); setMsg(null)
@@ -2022,8 +2046,8 @@ function PayrollSection() {
       const entries = items.map(it => ({
         employee_id: it.employee_id,
         advance: Number(it.advance) || 0,
-        permission_hours: Number(it.permission_hours) || 0,
-        esi: Number(it.esi) || 0,
+        permission_hours: Number(it.permission_override) || 0,
+        others_deduction: Number(it.others_input) || 0,
       }))
       const res = await fetch('/api/hr/payroll/inputs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ month, year, entries }) })
       const data = await res.json()
@@ -2057,10 +2081,10 @@ function PayrollSection() {
 
   const num = (v: any) => Number(v) || 0
   const totals = items.reduce((t, it) => ({
-    working: t.working + num(it.working_salary), sunday: t.sunday + num(it.sunday_salary),
-    incentive: t.incentive + num(it.incentive), perm: t.perm + num(it.permission_amount),
-    advance: t.advance + num(it.advance), esi: t.esi + num(it.esi), net: t.net + num(it.net_salary),
-  }), { working: 0, sunday: 0, incentive: 0, perm: 0, advance: 0, esi: 0, net: 0 })
+    total: t.total + num(it.working_salary), incentive: t.incentive + num(it.incentive),
+    esi: t.esi + num(it.esi), pf: t.pf + num(it.pf), perm: t.perm + num(it.permission_amount),
+    advance: t.advance + num(it.advance), others: t.others + num(it.others_deduction), net: t.net + num(it.net_salary),
+  }), { total: 0, incentive: 0, esi: 0, pf: 0, perm: 0, advance: 0, others: 0, net: 0 })
 
   const inputCls = "w-16 px-1 py-0.5 border rounded text-right text-xs disabled:bg-gray-50 disabled:text-gray-400"
 
@@ -2069,7 +2093,7 @@ function PayrollSection() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-xl font-bold text-gray-900">Payroll</h2>
-          <p className="text-xs text-gray-500">Salary = day rate × attendance · 5% incentive on full attendance · permission = 1 hr</p>
+          <p className="text-xs text-gray-500">Basic 30% · DA 25% · HRA 20% · Other 25% of Earned Wages · ESI 0.75% · PF 12% of (Basic+DA) · permission auto-detected from punches</p>
         </div>
         <div className="flex items-end gap-2">
           <select value={month} onChange={e => setMonth(Number(e.target.value))} className="border rounded-md px-3 py-2 text-sm">
@@ -2096,7 +2120,7 @@ function PayrollSection() {
         <div className="flex items-center gap-4 text-sm">
           <StatusBadge status={run.status} />
           {locked && <span className="text-xs text-gray-500">Locked — approved payroll cannot be changed</span>}
-          {!locked && items.length > 0 && <span className="text-xs text-gray-500">Type advance / permission hours / ESI directly in the table, then Save & Recalculate</span>}
+          {!locked && items.length > 0 && <span className="text-xs text-gray-500">Permission is auto-detected from punches — type in the override column only to replace it. Advance/Others are always manual. Then Save & Recalculate</span>}
         </div>
       )}
 
@@ -2107,7 +2131,7 @@ function PayrollSection() {
       ) : (
         <div className="border border-orange-100 rounded-xl overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-xs border-collapse" style={{ minWidth: '1100px' }}>
+            <table className="w-full text-xs border-collapse" style={{ minWidth: '1500px' }}>
               <thead>
                 <tr className="bg-orange-50 border-b border-orange-100">
                   <th className="px-2 py-2 text-left font-semibold text-gray-600">Code</th>
@@ -2115,15 +2139,21 @@ function PayrollSection() {
                   <th className="px-2 py-2 text-right font-semibold text-gray-600">Rate</th>
                   <th className="px-2 py-2 text-center font-semibold text-green-700" title="Full present days">P</th>
                   <th className="px-2 py-2 text-center font-semibold text-yellow-700" title="Half days">H</th>
-                  <th className="px-2 py-2 text-center font-semibold text-orange-500" title="Sundays worked">Sun</th>
+                  <th className="px-2 py-2 text-center font-semibold text-orange-400" title="Sundays worked — recorded only, not paid">Sun*</th>
                   <th className="px-2 py-2 text-center font-semibold text-red-500" title="Absent days">Abs</th>
-                  <th className="px-2 py-2 text-right font-semibold text-gray-600">Working ₹</th>
-                  <th className="px-2 py-2 text-right font-semibold text-gray-600">Sunday ₹</th>
+                  <th className="px-2 py-2 text-right font-semibold text-gray-600">Basic</th>
+                  <th className="px-2 py-2 text-right font-semibold text-gray-600">DA</th>
+                  <th className="px-2 py-2 text-right font-semibold text-gray-600">HRA</th>
+                  <th className="px-2 py-2 text-right font-semibold text-gray-600">Other</th>
+                  <th className="px-2 py-2 text-right font-semibold text-gray-800">Total</th>
                   <th className="px-2 py-2 text-right font-semibold text-green-700" title="5% full attendance">Incentive</th>
-                  <th className="px-2 py-2 text-right font-semibold text-blue-700" title="Permission hours (1 = 1 hr)">Perm hrs</th>
+                  <th className="px-2 py-2 text-right font-semibold text-red-500" title="0.75% of Total">ESI</th>
+                  <th className="px-2 py-2 text-right font-semibold text-red-500" title="12% of Basic+DA">PF</th>
+                  <th className="px-2 py-2 text-right font-semibold text-blue-700" title="Detected from in-between punches">Auto Perm</th>
+                  <th className="px-2 py-2 text-right font-semibold text-blue-700" title="0 = use auto-detected value">Perm Override</th>
                   <th className="px-2 py-2 text-right font-semibold text-red-500">Perm ₹</th>
                   <th className="px-2 py-2 text-right font-semibold text-red-500">Advance</th>
-                  <th className="px-2 py-2 text-right font-semibold text-red-500">ESI</th>
+                  <th className="px-2 py-2 text-right font-semibold text-red-500">Others</th>
                   <th className="px-2 py-2 text-right font-semibold text-gray-900">Net Salary</th>
                 </tr>
               </thead>
@@ -2137,14 +2167,20 @@ function PayrollSection() {
                     <td className="px-2 py-1.5 text-right font-mono">{num(it.day_rate)}</td>
                     <td className="px-2 py-1.5 text-center text-green-700 font-semibold">{num(it.present_days)}</td>
                     <td className="px-2 py-1.5 text-center text-yellow-700">{num(it.half_days) || '—'}</td>
-                    <td className="px-2 py-1.5 text-center text-orange-500">{num(it.sunday_days) || '—'}</td>
+                    <td className="px-2 py-1.5 text-center text-orange-400">{num(it.sunday_days) || '—'}</td>
                     <td className="px-2 py-1.5 text-center text-red-500">{num(it.absent_days) || '—'}</td>
-                    <td className="px-2 py-1.5 text-right font-mono">{fmt(it.working_salary)}</td>
-                    <td className="px-2 py-1.5 text-right font-mono">{num(it.sunday_salary) ? fmt(it.sunday_salary) : '—'}</td>
+                    <td className="px-2 py-1.5 text-right font-mono">{fmt(it.basic)}</td>
+                    <td className="px-2 py-1.5 text-right font-mono">{fmt(it.da)}</td>
+                    <td className="px-2 py-1.5 text-right font-mono">{fmt(it.hra)}</td>
+                    <td className="px-2 py-1.5 text-right font-mono">{fmt(it.other_allowance)}</td>
+                    <td className="px-2 py-1.5 text-right font-mono font-semibold text-gray-800">{fmt(it.working_salary)}</td>
                     <td className="px-2 py-1.5 text-right font-mono text-green-700">{num(it.incentive) ? fmt(it.incentive) : '—'}</td>
+                    <td className="px-2 py-1.5 text-right font-mono text-red-500">{num(it.esi) ? '-' + fmt(it.esi) : '—'}</td>
+                    <td className="px-2 py-1.5 text-right font-mono text-red-500">{num(it.pf) ? '-' + fmt(it.pf) : '—'}</td>
+                    <td className="px-2 py-1.5 text-right font-mono text-blue-600">{num(it.permission_auto_hours).toFixed(2)}</td>
                     <td className="px-2 py-1.5 text-right">
-                      <input type="number" step="0.5" min="0" disabled={locked} value={it.permission_hours ?? 0}
-                        onChange={e => editItem(idx, 'permission_hours', e.target.value)} className={inputCls} />
+                      <input type="number" step="0.25" min="0" disabled={locked} value={it.permission_override ?? 0}
+                        onChange={e => editItem(idx, 'permission_override', e.target.value)} className={inputCls} />
                     </td>
                     <td className="px-2 py-1.5 text-right font-mono text-red-500">{num(it.permission_amount) ? '-' + fmt(it.permission_amount) : '—'}</td>
                     <td className="px-2 py-1.5 text-right">
@@ -2152,22 +2188,23 @@ function PayrollSection() {
                         onChange={e => editItem(idx, 'advance', e.target.value)} className={inputCls} />
                     </td>
                     <td className="px-2 py-1.5 text-right">
-                      <input type="number" step="1" min="0" disabled={locked} value={it.esi ?? 0}
-                        onChange={e => editItem(idx, 'esi', e.target.value)} className={inputCls} />
+                      <input type="number" step="10" min="0" disabled={locked} value={it.others_input ?? 0}
+                        onChange={e => editItem(idx, 'others_input', e.target.value)} className={inputCls} />
                     </td>
                     <td className="px-2 py-1.5 text-right font-mono font-bold text-gray-900">{fmt(it.net_salary)}</td>
                   </tr>
                 ))}
                 {items.length > 0 && (
                   <tr className="bg-orange-50 font-bold border-t-2 border-orange-200">
-                    <td colSpan={7} className="px-2 py-2 text-gray-700">TOTAL — {items.length} employees</td>
-                    <td className="px-2 py-2 text-right font-mono">{fmt(totals.working)}</td>
-                    <td className="px-2 py-2 text-right font-mono">{fmt(totals.sunday)}</td>
+                    <td colSpan={11} className="px-2 py-2 text-gray-700">TOTAL — {items.length} employees</td>
+                    <td className="px-2 py-2 text-right font-mono">{fmt(totals.total)}</td>
                     <td className="px-2 py-2 text-right font-mono text-green-700">{fmt(totals.incentive)}</td>
-                    <td />
+                    <td className="px-2 py-2 text-right font-mono text-red-500">-{fmt(totals.esi)}</td>
+                    <td className="px-2 py-2 text-right font-mono text-red-500">-{fmt(totals.pf)}</td>
+                    <td /><td />
                     <td className="px-2 py-2 text-right font-mono text-red-500">-{fmt(totals.perm)}</td>
                     <td className="px-2 py-2 text-right font-mono text-red-500">-{fmt(totals.advance)}</td>
-                    <td className="px-2 py-2 text-right font-mono text-red-500">-{fmt(totals.esi)}</td>
+                    <td className="px-2 py-2 text-right font-mono text-red-500">-{fmt(totals.others)}</td>
                     <td className="px-2 py-2 text-right font-mono text-lg">{fmt(totals.net)}</td>
                   </tr>
                 )}

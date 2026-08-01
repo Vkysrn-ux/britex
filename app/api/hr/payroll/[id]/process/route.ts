@@ -4,15 +4,20 @@ import { getDb } from '@/lib/db'
 
 type Ctx = { params: Promise<{ id: string }> }
 
-// Britex salary rules:
-//   working_days      = days in month minus Sundays
-//   working_salary    = day_rate × (present + 0.5 × half_days)   [non-Sunday days]
-//   sunday_salary     = day_rate × sundays worked (normal rate)
-//   incentive         = 5% of working_salary, only when present == working_days (no leave, no half day)
+// Britex salary rules (per "Salary statement.xlsx" proposal, confirmed with owner):
+//   working_days  = days in month minus Sundays
+//   Earned Wages  = day_rate × (present + 0.5 × half_days)   [Sunday excluded from pay;
+//                    Sunday attendance is still recorded for reference only]
+//   Basic = 30% · DA = 25% · HRA = 20% · Other = 25%   (all of Earned Wages; sums to 100%)
+//   Total = Earned Wages (= Basic+DA+HRA+Other)
+//   Incentive = 5% of Total, only on full attendance (no leave/half-day in the month)
+//   ESI = 0.75% of Total
+//   PF  = 12% of (Basic + DA)
+//   Permission: auto-detected from biometric in-between punches (see attendance-listener),
+//               summed across the month in minutes -> hours; a manual month entry overrides it
 //   permission_amount = permission_hours × day_rate / 8
-//   net               = working + sunday + incentive − esi − advance − permission_amount
-// Advance / permission / ESI come from hr_payroll_inputs (entered by office).
-// Re-processing is allowed while status is draft or processed; blocked once paid.
+//   Others = free-form manual deduction (uniform, extra advance, etc.)
+//   Net = Total + Incentive − ESI − PF − Advance − Permission − Others
 export async function POST(_req: Request, { params }: Ctx) {
   try {
     const db = getDb()
@@ -35,8 +40,8 @@ export async function POST(_req: Request, { params }: Ctx) {
     const [employees] = await db.query(
       `SELECT e.id, e.employee_code, COALESCE(e.day_rate, 0) AS day_rate,
               COALESCE(i.advance, 0) AS advance,
-              COALESCE(i.permission_hours, 0) AS permission_hours,
-              CASE WHEN COALESCE(i.esi, 0) > 0 THEN i.esi ELSE COALESCE(e.esi_amount, 0) END AS esi
+              COALESCE(i.permission_hours, 0) AS permission_hours_override,
+              COALESCE(i.others_deduction, 0) AS others_override
          FROM hr_employees e
          LEFT JOIN hr_payroll_inputs i
            ON i.employee_id = e.id AND i.month = :month AND i.year = :year
@@ -50,7 +55,8 @@ export async function POST(_req: Request, { params }: Ctx) {
       `SELECT employee_id,
               COUNT(*) FILTER (WHERE EXTRACT(DOW FROM date) <> 0 AND status IN ('present','late'))  AS full_days,
               COUNT(*) FILTER (WHERE EXTRACT(DOW FROM date) <> 0 AND status = 'half_day')            AS half_days,
-              COUNT(*) FILTER (WHERE EXTRACT(DOW FROM date) = 0  AND status IN ('present','late','half_day')) AS sunday_days
+              COUNT(*) FILTER (WHERE EXTRACT(DOW FROM date) = 0  AND status IN ('present','late','half_day')) AS sunday_days,
+              COALESCE(SUM(permission_minutes), 0) AS permission_minutes
          FROM hr_attendance
         WHERE EXTRACT(MONTH FROM date) = :month AND EXTRACT(YEAR FROM date) = :year
         GROUP BY employee_id`,
@@ -64,51 +70,66 @@ export async function POST(_req: Request, { params }: Ctx) {
 
     for (const emp of employees as any[]) {
       const rate = Number(emp.day_rate)
-      const att = attMap.get(Number(emp.id)) || { full_days: 0, half_days: 0, sunday_days: 0 }
+      const att = attMap.get(Number(emp.id)) || { full_days: 0, half_days: 0, sunday_days: 0, permission_minutes: 0 }
       const fullDays = Number(att.full_days), halfDays = Number(att.half_days), sundayDays = Number(att.sunday_days)
       const presentEquiv = fullDays + halfDays * 0.5
 
-      const workingSalary = round2(rate * presentEquiv)
-      const sundaySalary = round2(rate * sundayDays)
+      // Earned Wages / Total — Sunday is recorded but not paid
+      const earnedWages = round2(rate * presentEquiv)
+      const basic = round2(earnedWages * 0.30)
+      const da = round2(earnedWages * 0.25)
+      const hra = round2(earnedWages * 0.20)
+      const otherAllowance = round2(earnedWages * 0.25)
+      const total = round2(basic + da + hra + otherAllowance)
+
       const fullAttendance = fullDays === workingDays && halfDays === 0
-      const incentive = fullAttendance ? round2(workingSalary * 0.05) : 0
+      const incentive = fullAttendance ? round2(total * 0.05) : 0
+
+      const esi = round2(total * 0.0075)
+      const pf = round2((basic + da) * 0.12)
+
+      // Permission: auto from biometric punches, overridable per month
+      const autoPermissionHours = round2(Number(att.permission_minutes) / 60)
+      const permissionHours = Number(emp.permission_hours_override) > 0 ? Number(emp.permission_hours_override) : autoPermissionHours
+      const permissionAmount = round2(permissionHours * rate / 8)
 
       const advance = Number(emp.advance)
-      const permissionHours = Number(emp.permission_hours)
-      const permissionAmount = round2(permissionHours * rate / 8)
-      const esi = Number(emp.esi)
+      const others = Number(emp.others_override)
 
-      const gross = round2(workingSalary + sundaySalary + incentive)
-      const deductions = round2(esi + advance + permissionAmount)
+      const gross = round2(total + incentive)
+      const deductions = round2(esi + pf + advance + permissionAmount + others)
       const net = round2(gross - deductions)
       const absentDays = Math.max(0, workingDays - presentEquiv)
 
       await db.execute(
         `INSERT INTO hr_payroll_items
            (payroll_id, employee_id, day_rate, working_days, present_days, half_days, sunday_days,
-            absent_days, leave_days, working_salary, sunday_salary, incentive,
-            esi, advance, permission_hours, permission_amount,
-            basic_salary, gross_salary, other_deductions, net_salary)
+            absent_days, leave_days, basic, da, hra, other_allowance, working_salary,
+            incentive, esi, pf, advance, permission_hours, permission_auto_hours, permission_amount,
+            others_deduction, basic_salary, gross_salary, other_deductions, net_salary)
          VALUES
            (:payroll_id, :employee_id, :day_rate, :working_days, :present_days, :half_days, :sunday_days,
-            :absent_days, :leave_days, :working_salary, :sunday_salary, :incentive,
-            :esi, :advance, :permission_hours, :permission_amount,
-            :working_salary2, :gross, :deductions, :net)
+            :absent_days, :leave_days, :basic, :da, :hra, :other_allowance, :total,
+            :incentive, :esi, :pf, :advance, :permission_hours, :permission_auto_hours, :permission_amount,
+            :others, :total2, :gross, :deductions, :net)
          ON CONFLICT (payroll_id, employee_id) DO UPDATE SET
             day_rate=EXCLUDED.day_rate, working_days=EXCLUDED.working_days,
             present_days=EXCLUDED.present_days, half_days=EXCLUDED.half_days, sunday_days=EXCLUDED.sunday_days,
             absent_days=EXCLUDED.absent_days, leave_days=EXCLUDED.leave_days,
-            working_salary=EXCLUDED.working_salary, sunday_salary=EXCLUDED.sunday_salary,
-            incentive=EXCLUDED.incentive, esi=EXCLUDED.esi, advance=EXCLUDED.advance,
-            permission_hours=EXCLUDED.permission_hours, permission_amount=EXCLUDED.permission_amount,
+            basic=EXCLUDED.basic, da=EXCLUDED.da, hra=EXCLUDED.hra, other_allowance=EXCLUDED.other_allowance,
+            working_salary=EXCLUDED.working_salary, incentive=EXCLUDED.incentive,
+            esi=EXCLUDED.esi, pf=EXCLUDED.pf, advance=EXCLUDED.advance,
+            permission_hours=EXCLUDED.permission_hours, permission_auto_hours=EXCLUDED.permission_auto_hours,
+            permission_amount=EXCLUDED.permission_amount, others_deduction=EXCLUDED.others_deduction,
             basic_salary=EXCLUDED.basic_salary, gross_salary=EXCLUDED.gross_salary,
             other_deductions=EXCLUDED.other_deductions, net_salary=EXCLUDED.net_salary`,
         { payroll_id: payrollId, employee_id: emp.id, day_rate: rate, working_days: workingDays,
           present_days: fullDays, half_days: halfDays, sunday_days: sundayDays,
           absent_days: Math.round(absentDays), leave_days: Math.round(absentDays),
-          working_salary: workingSalary, sunday_salary: sundaySalary, incentive,
-          esi, advance, permission_hours: permissionHours, permission_amount: permissionAmount,
-          working_salary2: workingSalary, gross, deductions, net }
+          basic, da, hra, other_allowance: otherAllowance, total,
+          incentive, esi, pf, advance,
+          permission_hours: permissionHours, permission_auto_hours: autoPermissionHours, permission_amount: permissionAmount,
+          others, total2: total, gross, deductions, net }
       )
 
       totalGross += gross; totalDed += deductions; totalNet += net; count++

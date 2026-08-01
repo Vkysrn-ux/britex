@@ -19,7 +19,7 @@ export async function GET(req: Request) {
               d.name AS department_name, e.day_rate,
               COALESCE(i.advance, 0) AS advance,
               COALESCE(i.permission_hours, 0) AS permission_hours,
-              COALESCE(i.esi, 0) AS esi,
+              COALESCE(i.others_deduction, 0) AS others_deduction,
               i.notes
          FROM hr_employees e
          LEFT JOIN hr_departments d ON d.id = e.department_id
@@ -43,7 +43,7 @@ const saveSchema = z.object({
     employee_id: z.coerce.number().int().positive(),
     advance: z.coerce.number().min(0).optional().default(0),
     permission_hours: z.coerce.number().min(0).optional().default(0),
-    esi: z.coerce.number().min(0).optional().default(0),
+    others_deduction: z.coerce.number().min(0).optional().default(0),
     notes: z.string().optional().nullable(),
   })).min(1),
 })
@@ -55,16 +55,16 @@ export async function POST(req: Request) {
     const db = getDb()
     for (const e of parsed.entries) {
       await db.execute(
-        `INSERT INTO hr_payroll_inputs (month, year, employee_id, advance, permission_hours, esi, notes, updated_at)
-         VALUES (:month, :year, :employee_id, :advance, :permission_hours, :esi, :notes, NOW())
+        `INSERT INTO hr_payroll_inputs (month, year, employee_id, advance, permission_hours, others_deduction, notes, updated_at)
+         VALUES (:month, :year, :employee_id, :advance, :permission_hours, :others_deduction, :notes, NOW())
          ON CONFLICT (month, year, employee_id)
          DO UPDATE SET advance = EXCLUDED.advance,
                        permission_hours = EXCLUDED.permission_hours,
-                       esi = EXCLUDED.esi,
+                       others_deduction = EXCLUDED.others_deduction,
                        notes = EXCLUDED.notes,
                        updated_at = NOW()`,
         { month: parsed.month, year: parsed.year, employee_id: e.employee_id,
-          advance: e.advance, permission_hours: e.permission_hours, esi: e.esi, notes: e.notes ?? null }
+          advance: e.advance, permission_hours: e.permission_hours, others_deduction: e.others_deduction, notes: e.notes ?? null }
       )
     }
     return NextResponse.json({ success: true, saved: parsed.entries.length })

@@ -13,8 +13,9 @@ export async function GET(req: Request) {
     const [rows] = await db.query(
       `SELECT p.month, p.year, p.status AS payroll_status,
               pi.day_rate, pi.working_days, pi.present_days, pi.half_days, pi.sunday_days,
-              pi.working_salary, pi.sunday_salary, pi.incentive,
-              pi.esi, pi.advance, pi.permission_hours, pi.permission_amount, pi.net_salary
+              pi.working_salary, pi.basic, pi.da, pi.hra, pi.other_allowance, pi.incentive,
+              pi.esi, pi.pf, pi.advance, pi.permission_hours, pi.permission_auto_hours,
+              pi.permission_amount, pi.others_deduction, pi.net_salary
          FROM hr_payroll_items pi
          JOIN hr_payroll p ON p.id = pi.payroll_id
         WHERE pi.employee_id = :id
