@@ -271,6 +271,30 @@ async function handleAttlog(req, res, sn) {
       )
       var times = existing.rows.map(function(r) { return r.punch_time.slice(0,8) })
 
+      // Safety net: if hr_punches has nothing yet but hr_attendance already has a
+      // check_in for this day (e.g. a pre-existing record from before this table
+      // existed), seed times from it instead of treating this punch as day 1 —
+      // otherwise a later punch would silently overwrite the real check-in.
+      if (times.length === 0) {
+        var prevAtt = await pool.query(
+          'SELECT check_in, check_out FROM hr_attendance WHERE employee_id=$1 AND date=$2',
+          [empId, dateStr]
+        )
+        if (prevAtt.rows.length > 0 && prevAtt.rows[0].check_in) {
+          var prevIn = prevAtt.rows[0].check_in.slice(0,8)
+          var prevOut = prevAtt.rows[0].check_out ? prevAtt.rows[0].check_out.slice(0,8) : null
+          times.push(prevIn)
+          if (prevOut && prevOut !== prevIn) times.push(prevOut)
+          for (var s = 0; s < times.length; s++) {
+            await pool.query(
+              'INSERT INTO hr_punches(employee_id,date,punch_time) SELECT $1,$2,$3 WHERE NOT EXISTS (SELECT 1 FROM hr_punches WHERE employee_id=$1 AND date=$2 AND punch_time=$3)',
+              [empId, dateStr, times[s]]
+            )
+          }
+          log('  SEEDED PIN=' + pin + ' ' + dateStr + ' from existing hr_attendance: ' + times.join(','))
+        }
+      }
+
       // Ignore exact duplicate re-sends and accidental double-taps within DEBOUNCE_MINS
       if (times.some(function(t) { return Math.abs(punchM - toMins(t.slice(0,5))) <= DEBOUNCE_MINS })) {
         log('  DEBOUNCE  PIN=' + pin + ' ' + punchTime + ' (within ' + DEBOUNCE_MINS + 'min of an existing punch, ignored)')
