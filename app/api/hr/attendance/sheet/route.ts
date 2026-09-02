@@ -65,7 +65,7 @@ export async function GET(req: Request) {
 
       const attendance: Record<number, any> = {}
       for (const { day, is_sunday, is_future } of days) {
-        if (is_sunday) { sundays++; continue }
+        if (is_sunday) sundays++
         const rec = empAtt.get(day)
         if (rec) {
           attendance[day] = {
@@ -80,11 +80,13 @@ export async function GET(req: Request) {
             late_morning_mins: Number(rec.late_morning_mins) || 0,
           }
           if (rec.status === 'present')   present++
-          else if (rec.status === 'absent')   absent++
+          else if (rec.status === 'absent' && !is_sunday)   absent++
           else if (rec.status === 'half_day') { half_day++; present += 0.5 }
           else if (rec.status === 'late')     { late_morning++; present++ }
-          else if (rec.status === 'on_leave') on_leave++
+          else if (rec.status === 'on_leave' && !is_sunday) on_leave++
           if (rec.is_late_lunch) late_lunch++
+        } else if (is_sunday) {
+          attendance[day] = null // Sunday off, no punch — not counted as absent
         } else {
           attendance[day] = is_future ? 'future' : null
           if (!is_future) absent++ // only past/today with no record = absent

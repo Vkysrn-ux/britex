@@ -6,8 +6,8 @@ type Ctx = { params: Promise<{ id: string }> }
 
 // Britex salary rules (per "Salary statement.xlsx" proposal, confirmed with owner):
 //   working_days  = days in month minus Sundays
-//   Earned Wages  = day_rate × (present + 0.5 × half_days)   [Sunday excluded from pay;
-//                    Sunday attendance is still recorded for reference only]
+//   Earned Wages  = day_rate × (present + 0.5 × half_days + sunday_present + 0.5 × sunday_half_days)
+//                   [Sunday worked is paid at the normal day_rate, not double, per owner's rule]
 //   Basic = 30% · DA = 25% · HRA = 20% · Other = 25%   (all of Earned Wages; sums to 100%)
 //   Total = Earned Wages (= Basic+DA+HRA+Other)
 //   Incentive = 5% of Total, only on full attendance (no leave/half-day in the month)
@@ -55,7 +55,8 @@ export async function POST(_req: Request, { params }: Ctx) {
       `SELECT employee_id,
               COUNT(*) FILTER (WHERE EXTRACT(DOW FROM date) <> 0 AND status IN ('present','late'))  AS full_days,
               COUNT(*) FILTER (WHERE EXTRACT(DOW FROM date) <> 0 AND status = 'half_day')            AS half_days,
-              COUNT(*) FILTER (WHERE EXTRACT(DOW FROM date) = 0  AND status IN ('present','late','half_day')) AS sunday_days,
+              COUNT(*) FILTER (WHERE EXTRACT(DOW FROM date) = 0  AND status IN ('present','late'))   AS sunday_full_days,
+              COUNT(*) FILTER (WHERE EXTRACT(DOW FROM date) = 0  AND status = 'half_day')            AS sunday_half_days,
               COALESCE(SUM(permission_minutes), 0) AS permission_minutes
          FROM hr_attendance
         WHERE EXTRACT(MONTH FROM date) = :month AND EXTRACT(YEAR FROM date) = :year
@@ -70,12 +71,15 @@ export async function POST(_req: Request, { params }: Ctx) {
 
     for (const emp of employees as any[]) {
       const rate = Number(emp.day_rate)
-      const att = attMap.get(Number(emp.id)) || { full_days: 0, half_days: 0, sunday_days: 0, permission_minutes: 0 }
-      const fullDays = Number(att.full_days), halfDays = Number(att.half_days), sundayDays = Number(att.sunday_days)
+      const att = attMap.get(Number(emp.id)) || { full_days: 0, half_days: 0, sunday_full_days: 0, sunday_half_days: 0, permission_minutes: 0 }
+      const fullDays = Number(att.full_days), halfDays = Number(att.half_days)
+      const sundayFullDays = Number(att.sunday_full_days), sundayHalfDays = Number(att.sunday_half_days)
+      const sundayDays = sundayFullDays + sundayHalfDays
       const presentEquiv = fullDays + halfDays * 0.5
+      const sundayEquiv = sundayFullDays + sundayHalfDays * 0.5
 
-      // Earned Wages / Total — Sunday is recorded but not paid
-      const earnedWages = round2(rate * presentEquiv)
+      // Earned Wages / Total — Sunday worked is paid at the normal day_rate
+      const earnedWages = round2(rate * (presentEquiv + sundayEquiv))
       const basic = round2(earnedWages * 0.30)
       const da = round2(earnedWages * 0.25)
       const hra = round2(earnedWages * 0.20)

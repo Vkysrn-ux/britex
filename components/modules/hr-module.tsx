@@ -2360,10 +2360,11 @@ const STATUS_META: Record<string, { code: string; bg: string; text: string }> = 
 }
 
 function DayCell({ rec, isSunday }: { rec: any; isSunday: boolean }) {
-  if (isSunday) return <td className="px-0 py-1 text-center bg-orange-50 text-orange-400 text-[11px] font-semibold">Sun</td>
   // Future date — no data yet, show blank
   if (rec === 'future') return <td className="px-0 py-1 text-center text-gray-200 text-[11px]">—</td>
-  // Past date, no record = absent
+  // Sunday with no punch — off day, not absent
+  if (isSunday && !rec) return <td className="px-0 py-1 text-center bg-orange-50 text-orange-400 text-[11px] font-semibold">Sun</td>
+  // Past date (non-Sunday), no record = absent
   if (!rec) return (
     <td className="px-0 py-1 text-center">
       <span className="inline-block w-7 rounded text-[11px] font-bold bg-red-50 text-red-400">A</span>
@@ -2413,9 +2414,8 @@ function AttendanceSheetSection({ departments }: { departments: Department[] }) 
     const rows = (data.employees || []).map((emp: any, i: number) => [
       i + 1, emp.employee_code, emp.name, emp.department_name,
       ...(data.days || []).map((d: any) => {
-        if (d.is_sunday) return 'Sun'
         const r = emp.attendance[d.day]
-        if (!r) return 'A'
+        if (!r) return d.is_sunday ? 'Sun' : 'A'
         const code = STATUS_META[r.status]?.code || r.status
         return r.punch_count === 1 ? 'P*' : code
       }),
@@ -2594,7 +2594,7 @@ function AttendanceSheetSection({ departments }: { departments: Department[] }) 
                                 </thead>
                                 <tbody>
                                   {days.map(d => {
-                                    if (d.is_sunday) return (
+                                    if (d.is_sunday && !emp.attendance[d.day]) return (
                                       <tr key={d.day} className="bg-orange-50">
                                         <td className="px-2 py-1 font-bold text-orange-400">{d.day}</td>
                                         <td className="px-2 py-1 text-orange-300">{d.dow}</td>
