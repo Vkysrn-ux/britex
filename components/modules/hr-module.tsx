@@ -2585,9 +2585,9 @@ function AttendanceSheetSection({ departments }: { departments: Department[] }) 
                                   <tr className="bg-white border-b border-gray-200">
                                     <th className="px-2 py-1.5 text-left font-semibold text-gray-500 w-10">Day</th>
                                     <th className="px-2 py-1.5 text-left font-semibold text-gray-500 w-10">DOW</th>
-                                    <th className="px-2 py-1.5 text-center font-semibold text-gray-500 w-16">Punches</th>
-                                    <th className="px-2 py-1.5 text-center font-semibold text-green-600 w-16">Entry</th>
-                                    <th className="px-2 py-1.5 text-center font-semibold text-red-500 w-16">Exit</th>
+                                    <th className="px-2 py-1.5 text-center font-semibold text-gray-500 w-10">#</th>
+                                    <th className="px-2 py-1.5 text-left font-semibold text-gray-500">Punch Times (In &rarr; Out)</th>
+                                    <th className="px-2 py-1.5 text-center font-semibold text-purple-600 w-20">Permission</th>
                                     <th className="px-2 py-1.5 text-center font-semibold text-orange-600 w-24">Morning Late</th>
                                     <th className="px-2 py-1.5 text-center font-semibold text-gray-500 w-16">Status</th>
                                   </tr>
@@ -2625,8 +2625,38 @@ function AttendanceSheetSection({ departments }: { departments: Department[] }) 
                                             }`}>{rec.punch_count}</span>
                                           ) : <span className="text-gray-300">0</span>}
                                         </td>
-                                        <td className="px-2 py-1 text-center font-mono text-green-700">{rec?.check_in ? rec.check_in.slice(0,5) : '—'}</td>
-                                        <td className="px-2 py-1 text-center font-mono text-red-500">{rec?.check_out ? rec.check_out.slice(0,5) : '—'}</td>
+                                        <td className="px-2 py-1">
+                                          {rec && rec.punches?.length > 0 ? (
+                                            <div className="flex flex-wrap items-center gap-1">
+                                              {rec.punches.map((t: string, i: number) => {
+                                                const isFirst = i === 0
+                                                const isLast = i === rec.punches.length - 1
+                                                const cls = isFirst ? 'bg-green-100 text-green-700'
+                                                  : isLast && rec.punches.length > 1 ? 'bg-red-100 text-red-600'
+                                                  : 'bg-purple-100 text-purple-700'
+                                                return (
+                                                  <React.Fragment key={i}>
+                                                    {i > 0 && <span className="text-gray-300">&rarr;</span>}
+                                                    <span className={`px-1.5 py-0.5 rounded font-mono font-semibold ${cls}`} title={isFirst ? 'Entry' : isLast ? 'Exit' : `Punch ${i + 1} (in permission window)`}>
+                                                      {t.slice(0, 5)}
+                                                    </span>
+                                                  </React.Fragment>
+                                                )
+                                              })}
+                                            </div>
+                                          ) : rec?.check_in ? (
+                                            <div className="flex items-center gap-1">
+                                              <span className="px-1.5 py-0.5 rounded font-mono font-semibold bg-green-100 text-green-700">{rec.check_in.slice(0,5)}</span>
+                                              {rec.check_out && <span className="text-gray-300">&rarr;</span>}
+                                              {rec.check_out && <span className="px-1.5 py-0.5 rounded font-mono font-semibold bg-red-100 text-red-600">{rec.check_out.slice(0,5)}</span>}
+                                            </div>
+                                          ) : <span className="text-gray-300">—</span>}
+                                        </td>
+                                        <td className="px-2 py-1 text-center">
+                                          {rec?.permission_minutes > 0 ? (
+                                            <span className="text-purple-600 font-semibold">{rec.permission_minutes} min</span>
+                                          ) : <span className="text-gray-300">—</span>}
+                                        </td>
                                         <td className="px-2 py-1 text-center">
                                           {isLateM ? (
                                             <span className="text-orange-600 font-semibold">+{rec.late_morning_mins} min</span>

@@ -43,10 +43,21 @@ export async function GET(req: Request) {
               EXTRACT(DAY FROM date) AS day,
               status, check_in, check_out,
               lunch_out, lunch_in,
-              punch_count, is_late_lunch, late_lunch_mins, late_morning_mins
+              punch_count, is_late_lunch, late_lunch_mins, late_morning_mins,
+              permission_minutes
          FROM hr_attendance
         WHERE EXTRACT(MONTH FROM date) = :att_month
           AND EXTRACT(YEAR  FROM date) = :att_year`,
+      { att_month: month, att_year: year }
+    )
+
+    // Fetch every raw punch this month, so the UI can show punch1/punch2/... individually
+    const [punchRows] = await db.query(
+      `SELECT employee_id, EXTRACT(DAY FROM date) AS day, punch_time
+         FROM hr_punches
+        WHERE EXTRACT(MONTH FROM date) = :att_month
+          AND EXTRACT(YEAR  FROM date) = :att_year
+        ORDER BY employee_id, date, punch_time`,
       { att_month: month, att_year: year }
     )
 
@@ -58,8 +69,19 @@ export async function GET(req: Request) {
       attMap.get(row.employee_id)!.set(dayNum, row)
     }
 
+    // Build map: employee_id → day → [punch_time, ...]
+    const punchMap = new Map<number, Map<number, string[]>>()
+    for (const row of punchRows as any[]) {
+      const dayNum = Number(row.day)
+      if (!punchMap.has(row.employee_id)) punchMap.set(row.employee_id, new Map())
+      const empPunches = punchMap.get(row.employee_id)!
+      if (!empPunches.has(dayNum)) empPunches.set(dayNum, [])
+      empPunches.get(dayNum)!.push(row.punch_time)
+    }
+
     const employees = (empRows as any[]).map(emp => {
       const empAtt = attMap.get(emp.id) || new Map()
+      const empPunches = punchMap.get(emp.id) || new Map()
       let present = 0, absent = 0, half_day = 0, on_leave = 0, sundays = 0
       let late_morning = 0, late_lunch = 0
 
@@ -78,6 +100,8 @@ export async function GET(req: Request) {
             is_late_lunch:     Boolean(rec.is_late_lunch),
             late_lunch_mins:   Number(rec.late_lunch_mins) || 0,
             late_morning_mins: Number(rec.late_morning_mins) || 0,
+            permission_minutes: Number(rec.permission_minutes) || 0,
+            punches:           empPunches.get(day) || [],
           }
           if (rec.status === 'present')   present++
           else if (rec.status === 'absent' && !is_sunday)   absent++
