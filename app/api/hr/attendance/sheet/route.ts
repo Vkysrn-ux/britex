@@ -82,7 +82,7 @@ export async function GET(req: Request) {
     const employees = (empRows as any[]).map(emp => {
       const empAtt = attMap.get(emp.id) || new Map()
       const empPunches = punchMap.get(emp.id) || new Map()
-      let present = 0, absent = 0, half_day = 0, on_leave = 0, sundays = 0
+      let present = 0, absent = 0, half_day = 0, on_leave = 0, on_duty = 0, sundays = 0
       let late_morning = 0, late_lunch = 0
 
       const attendance: Record<number, any> = {}
@@ -108,6 +108,7 @@ export async function GET(req: Request) {
           else if (rec.status === 'half_day') { half_day++; present += 0.5 }
           else if (rec.status === 'late')     { late_morning++; present++ }
           else if (rec.status === 'on_leave' && !is_sunday) on_leave++
+          else if (rec.status === 'on_duty' && !is_sunday)  on_duty++
           if (rec.is_late_lunch) late_lunch++
         } else if (is_sunday) {
           attendance[day] = null // Sunday off, no punch — not counted as absent
@@ -123,7 +124,7 @@ export async function GET(req: Request) {
         name: `${emp.first_name} ${emp.last_name}`.trim(),
         department_name: emp.department_name || '—',
         attendance,
-        summary: { present, absent, half_day, on_leave, sundays, late_morning, late_lunch, total_days: totalDays },
+        summary: { present, absent, half_day, on_leave, on_duty, sundays, late_morning, late_lunch, total_days: totalDays },
       }
     })
 

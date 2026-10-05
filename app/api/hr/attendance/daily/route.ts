@@ -73,11 +73,12 @@ export async function GET(req: Request) {
     const late     = list.filter(r => r.status === 'late').length
     const half_day = list.filter(r => r.status === 'half_day').length
     const on_leave = list.filter(r => r.status === 'on_leave').length
+    const on_duty  = list.filter(r => r.status === 'on_duty').length
     const absent   = list.filter(r => !r.status).length
 
     return NextResponse.json({
       date,
-      summary: { total, present, late, half_day, on_leave, absent },
+      summary: { total, present, late, half_day, on_leave, on_duty, absent },
       employees: list,
     })
   } catch (err: any) {

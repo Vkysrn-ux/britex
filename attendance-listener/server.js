@@ -309,11 +309,14 @@ async function handleAttlog(req, res, sn) {
       times.sort()
 
       var day = computeDay(times)
+      // An approved OD day stays on_duty — punches are still recorded, but
+      // going out mid-day for duty must not turn it into half_day
       await pool.query(
         `INSERT INTO hr_attendance(employee_id,date,check_in,check_out,punch_count,status,late_morning_mins,permission_minutes,needs_review)
          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
          ON CONFLICT (employee_id,date) DO UPDATE SET
-           check_in=$3, check_out=$4, punch_count=$5, status=$6,
+           check_in=$3, check_out=$4, punch_count=$5,
+           status=CASE WHEN hr_attendance.status = 'on_duty' THEN 'on_duty' ELSE $6 END,
            late_morning_mins=$7, permission_minutes=$8, needs_review=$9`,
         [empId, dateStr, day.check_in, day.check_out, day.punch_count, day.status,
          day.late_morning_mins, day.permission_minutes, day.needs_review]
@@ -383,6 +386,24 @@ app.post('/admin/set-option', function(req, res) {
   cmdQueue.push(item)
   log('ADMIN queued SET OPTION ' + key + '=' + value + ' (cmd ' + item.id + ')')
   res.json({ queued: item.id, cmd: item.cmd, note: 'Device applies it on next poll; check GET /admin/queue' })
+})
+
+// Ask the device to re-push its own stored ATTLOG for a date/time range —
+// recovers punches that never made it into our DB (e.g. after an outage or
+// a bug like the hr_punches migration cutover). The device keeps every
+// punch in its own memory regardless of what it already uploaded.
+//   POST /admin/resync-attlog?token=...&start=2026-08-01 00:00:00&end=2026-08-01 23:59:59
+app.post('/admin/resync-attlog', function(req, res) {
+  if (!checkToken(req, res)) return
+  var today = new Date().toISOString().slice(0, 10)
+  var start = req.query.start || (today + ' 00:00:00')
+  var end   = req.query.end   || (today + ' 23:59:59')
+  var cmd = 'DATA QUERY ATTLOG StartTime=' + start + '\tEndTime=' + end
+  var item = { id: nextCmdId++, pin: null, name: 'resync ' + start + ' .. ' + end,
+               cmd: cmd, status: 'pending', return_code: null }
+  cmdQueue.push(item)
+  log('ADMIN queued ATTLOG resync ' + start + ' .. ' + end + ' (cmd ' + item.id + ')')
+  res.json({ queued: item.id, cmd: cmd, note: 'Device re-sends matching punches on next poll via the normal ATTLOG channel' })
 })
 
 // Clear the queue (e.g. before retrying with the other mode)

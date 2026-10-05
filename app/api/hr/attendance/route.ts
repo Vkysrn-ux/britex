@@ -8,7 +8,7 @@ const markSchema = z.object({
   date: z.string().min(1),
   check_in: z.string().optional().nullable(),
   check_out: z.string().optional().nullable(),
-  status: z.enum(['present', 'absent', 'half_day', 'late', 'on_leave']).optional(),
+  status: z.enum(['present', 'absent', 'half_day', 'late', 'on_leave', 'on_duty']).optional(),
   notes: z.string().optional().nullable(),
 })
 
@@ -28,7 +28,7 @@ const bulkSchema = z.object({
   date: z.string().min(1),
   records: z.array(z.object({
     employee_id: z.coerce.number().int(),
-    status: z.enum(['present', 'absent', 'half_day', 'late', 'on_leave']),
+    status: z.enum(['present', 'absent', 'half_day', 'late', 'on_leave', 'on_duty']),
     check_in: z.string().optional().nullable(),
     check_out: z.string().optional().nullable(),
     notes: z.string().optional().nullable(),

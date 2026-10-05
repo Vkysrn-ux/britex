@@ -6,6 +6,7 @@ type Ctx = { params: Promise<{ id: string }> }
 
 // Britex salary rules (per "Salary statement.xlsx" proposal, confirmed with owner):
 //   working_days  = days in month minus Sundays
+//   An approved OD (on_duty) day counts as a full present day
 //   Earned Wages  = day_rate × (present + 0.5 × half_days + sunday_present + 0.5 × sunday_half_days)
 //                   [Sunday worked is paid at the normal day_rate, not double, per owner's rule]
 //   Basic = 30% · DA = 25% · HRA = 20% · Other = 25%   (all of Earned Wages; sums to 100%)
@@ -53,11 +54,11 @@ export async function POST(_req: Request, { params }: Ctx) {
     // Attendance aggregates for the whole month in one query
     const [attRows] = await db.query(
       `SELECT employee_id,
-              COUNT(*) FILTER (WHERE EXTRACT(DOW FROM date) <> 0 AND status IN ('present','late'))  AS full_days,
+              COUNT(*) FILTER (WHERE EXTRACT(DOW FROM date) <> 0 AND status IN ('present','late','on_duty'))  AS full_days,
               COUNT(*) FILTER (WHERE EXTRACT(DOW FROM date) <> 0 AND status = 'half_day')            AS half_days,
               COUNT(*) FILTER (WHERE EXTRACT(DOW FROM date) = 0  AND status IN ('present','late'))   AS sunday_full_days,
               COUNT(*) FILTER (WHERE EXTRACT(DOW FROM date) = 0  AND status = 'half_day')            AS sunday_half_days,
-              COALESCE(SUM(permission_minutes), 0) AS permission_minutes
+              COALESCE(SUM(permission_minutes) FILTER (WHERE status <> 'on_duty'), 0) AS permission_minutes
          FROM hr_attendance
         WHERE EXTRACT(MONTH FROM date) = :month AND EXTRACT(YEAR FROM date) = :year
         GROUP BY employee_id`,

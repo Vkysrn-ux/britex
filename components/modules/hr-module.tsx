@@ -28,6 +28,12 @@ type LeaveRequest = {
   leave_type_name: string; start_date: string; end_date: string; days: number
   reason?: string; status: string; created_at: string; department_name?: string
 }
+type ODRequest = {
+  id: number; employee_id: number; employee_name: string; employee_code: string
+  start_date: string; end_date: string; days: number
+  out_time?: string | null; in_time?: string | null; place?: string | null; purpose?: string | null
+  status: string; created_at: string; department_name?: string
+}
 type Payroll = { id: number; month: number; year: number; status: string; total_gross: number; total_net: number; employee_count: number }
 type HRStats = {
   employees: { active: number; inactive: number; terminated: number; total: number }
@@ -53,6 +59,7 @@ function StatusBadge({ status }: { status: string }) {
     paid: 'bg-green-100 text-green-700', present: 'bg-green-100 text-green-700',
     absent: 'bg-red-100 text-red-700', half_day: 'bg-yellow-100 text-yellow-700',
     late: 'bg-orange-100 text-orange-700', on_leave: 'bg-blue-100 text-blue-700',
+    on_duty: 'bg-teal-100 text-teal-700',
     full_time: 'bg-indigo-100 text-indigo-700', part_time: 'bg-purple-100 text-purple-700',
     contract: 'bg-orange-100 text-orange-700', intern: 'bg-pink-100 text-pink-700',
   }
@@ -1274,6 +1281,7 @@ const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
   late:     { label: 'Late',     cls: 'bg-yellow-100 text-yellow-700 border-yellow-200' },
   half_day: { label: 'Half Day', cls: 'bg-orange-100 text-orange-700 border-orange-200' },
   on_leave: { label: 'On Leave', cls: 'bg-blue-100 text-blue-700 border-blue-200' },
+  on_duty:  { label: 'On Duty',  cls: 'bg-teal-100 text-teal-700 border-teal-200' },
   absent:   { label: 'Absent',   cls: 'bg-red-100 text-red-600 border-red-200' },
 }
 
@@ -1472,6 +1480,7 @@ function AttendanceSection() {
                 <option value="late">Late</option>
                 <option value="half_day">Half Day</option>
                 <option value="on_leave">On Leave</option>
+                <option value="on_duty">On Duty</option>
                 <option value="absent">Absent</option>
               </select>
             </div>
@@ -1644,6 +1653,7 @@ function AttendanceSection() {
                         <option value="late">Late</option>
                         <option value="half_day">Half Day</option>
                         <option value="on_leave">On Leave</option>
+                        <option value="on_duty">On Duty</option>
                         <option value="absent">Absent</option>
                       </select>
                     </td>
@@ -1970,6 +1980,241 @@ function LeaveSection({ employees }: { employees: Employee[] }) {
                           <Button size="sm" variant="outline" onClick={() => startEdit(r)} className="h-7 px-2 text-xs">Edit</Button>
                         </>
                       )}
+                      <Button size="sm" variant="outline" onClick={() => handleDelete(r)} className="h-7 px-2 text-xs text-red-500 hover:text-red-600 hover:bg-red-50">Delete</Button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+// ─── OD (On Duty) ─────────────────────────────────────────────────────────────
+// Employee working outside the factory. Approved OD days are marked on_duty in
+// attendance and paid as full present days (no permission deduction).
+
+const emptyOD = { employee_id: '', start_date: '', end_date: '', out_time: '', in_time: '', place: '', purpose: '' }
+
+function printODSlip(r: ODRequest) {
+  const w = window.open('', '_blank', 'width=720,height=800')
+  if (!w) return
+  const esc = (s: any) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!))
+  const dates = r.start_date === r.end_date ? fmtDate(r.start_date) : `${fmtDate(r.start_date)} to ${fmtDate(r.end_date)}`
+  const row = (k: string, v: any) => `<tr><th>${k}</th><td>${esc(v) || '&nbsp;'}</td></tr>`
+  w.document.write(`<!doctype html><html><head><title>OD Slip ${esc(r.employee_code)}</title><style>
+    body{font-family:Arial,sans-serif;padding:32px;color:#111}
+    h1{text-align:center;margin:0;font-size:22px}h2{text-align:center;margin:4px 0 24px;font-size:15px;font-weight:normal}
+    table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:10px;text-align:left;font-size:14px}
+    th{width:35%;background:#f5f5f5}.sig{display:flex;justify-content:space-between;margin-top:70px;font-size:13px}
+    .sig div{border-top:1px solid #333;width:28%;text-align:center;padding-top:6px}
+  </style></head><body>
+    <h1>BRITEX</h1><h2>ON DUTY (OD) SLIP — No. OD-${r.id}</h2>
+    <table>
+      ${row('Employee', `${r.employee_name} (${r.employee_code})`)}
+      ${row('Department', r.department_name)}
+      ${row('Date(s)', `${dates} — ${r.days} day(s)`)}
+      ${row('Time Out', r.out_time ? fmtTime(r.out_time) : '')}
+      ${row('Time In', r.in_time ? fmtTime(r.in_time) : '')}
+      ${row('Place', r.place)}
+      ${row('Purpose', r.purpose)}
+      ${row('Status', r.status.toUpperCase())}
+    </table>
+    <div class="sig"><div>Employee</div><div>Supervisor</div><div>HR / Manager</div></div>
+    <script>window.onload=function(){window.print()}</script>
+  </body></html>`)
+  w.document.close()
+}
+
+function ODSection({ employees }: { employees: Employee[] }) {
+  const [requests, setRequests] = useState<ODRequest[]>([])
+  const [statusFilter, setStatusFilter] = useState('pending')
+  const [showForm, setShowForm] = useState(false)
+  const [editId, setEditId] = useState<number | null>(null)
+  const [form, setForm] = useState(emptyOD)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+
+  const loadRequests = useCallback(() => {
+    const q = statusFilter !== 'all' ? `?status=${statusFilter}` : ''
+    fetch(`/api/hr/od${q}`).then(r => r.json()).then(d => setRequests(d.data || []))
+  }, [statusFilter])
+
+  useEffect(() => { loadRequests() }, [loadRequests])
+
+  const handleAction = async (id: number, action: 'approve' | 'reject') => {
+    try {
+      const res = await fetch(`/api/hr/od/${id}/action`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action })
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setMsg({ text: `OD request ${action}d successfully.`, type: 'success' })
+      loadRequests()
+    } catch (err: any) {
+      setMsg({ text: err.message, type: 'error' })
+    }
+  }
+
+  // Days excluding Sundays (factory works Saturdays) — matches server calculation
+  const calcDays = (start: string, end: string) => {
+    if (!start || !end || end < start) return 0
+    const s = new Date(start + 'T00:00:00Z'), e = new Date(end + 'T00:00:00Z')
+    let n = 0
+    for (const d = new Date(s); d <= e; d.setUTCDate(d.getUTCDate() + 1)) {
+      if (d.getUTCDay() !== 0) n++
+    }
+    return n
+  }
+
+  const startEdit = (r: ODRequest) => {
+    setEditId(r.id)
+    setForm({
+      employee_id: String(r.employee_id),
+      start_date: String(r.start_date).slice(0, 10), end_date: String(r.end_date).slice(0, 10),
+      out_time: (r.out_time || '').slice(0, 5), in_time: (r.in_time || '').slice(0, 5),
+      place: r.place || '', purpose: r.purpose || '',
+    })
+    setShowForm(true)
+  }
+
+  const handleDelete = async (r: ODRequest) => {
+    const note = r.status === 'approved' ? ' Its OD marks in attendance will also be removed.' : ''
+    if (!confirm(`Delete this OD request of ${r.employee_name}?${note}`)) return
+    try {
+      const res = await fetch(`/api/hr/od/${r.id}`, { method: 'DELETE' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setMsg({ text: 'OD request deleted.', type: 'success' })
+      loadRequests()
+    } catch (err: any) { setMsg({ text: err.message, type: 'error' }) }
+  }
+
+  const handleSubmit = async (ev: React.FormEvent) => {
+    ev.preventDefault(); setSaving(true); setMsg(null)
+    try {
+      const body = {
+        start_date: form.start_date, end_date: form.end_date,
+        out_time: form.out_time || null, in_time: form.in_time || null,
+        place: form.place, purpose: form.purpose,
+      }
+      const res = editId
+        ? await fetch(`/api/hr/od/${editId}`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+          })
+        : await fetch('/api/hr/od', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...body, employee_id: Number(form.employee_id) })
+          })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setMsg({ text: editId ? 'OD request updated.' : 'OD request submitted.', type: 'success' })
+      setShowForm(false); setEditId(null); setForm(emptyOD)
+      loadRequests()
+    } catch (err: any) {
+      setMsg({ text: err.message, type: 'error' })
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-bold text-gray-900">OD (On Duty)</h2>
+          <p className="text-xs text-gray-500">Work outside the factory — approved OD days are paid as present days</p>
+        </div>
+        <Button onClick={() => { setShowForm(s => !s); setEditId(null); setForm(emptyOD) }} className="bg-orange-600 hover:bg-orange-700 text-white">
+          <Plus className="w-4 h-4 mr-2" />New OD
+        </Button>
+      </div>
+
+      {msg && <div className={`p-3 rounded-lg text-sm ${msg.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>{msg.text}</div>}
+
+      {showForm && (
+        <Card className="border-orange-200">
+          <CardHeader className="pb-3"><CardTitle className="text-base">{editId ? 'Edit OD Request' : 'New OD Request'}</CardTitle></CardHeader>
+          <CardContent>
+            <form onSubmit={handleSubmit} className="grid grid-cols-2 gap-3">
+              <div className="col-span-2"><label className="text-xs font-medium text-gray-600">Employee*</label>
+                <EmployeeSearchSelect
+                  employees={employees}
+                  value={form.employee_id}
+                  onChange={id => setForm(f => ({ ...f, employee_id: id }))}
+                  disabled={!!editId}
+                  required
+                /></div>
+              <div><label className="text-xs font-medium text-gray-600">From Date*</label>
+                <Input type="date" value={form.start_date} onChange={e => setForm(f => ({ ...f, start_date: e.target.value, end_date: f.end_date || e.target.value }))} required className="mt-1" /></div>
+              <div><label className="text-xs font-medium text-gray-600">To Date*</label>
+                <Input type="date" value={form.end_date} onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))} required className="mt-1" />
+                {form.start_date && form.end_date && <p className="text-xs text-orange-600 mt-1">{calcDays(form.start_date, form.end_date)} day(s)</p>}</div>
+              <div><label className="text-xs font-medium text-gray-600">Time Out</label>
+                <Input type="time" value={form.out_time} onChange={e => setForm(f => ({ ...f, out_time: e.target.value }))} className="mt-1" /></div>
+              <div><label className="text-xs font-medium text-gray-600">Time In</label>
+                <Input type="time" value={form.in_time} onChange={e => setForm(f => ({ ...f, in_time: e.target.value }))} className="mt-1" /></div>
+              <div className="col-span-2"><label className="text-xs font-medium text-gray-600">Place*</label>
+                <Input value={form.place} onChange={e => setForm(f => ({ ...f, place: e.target.value }))} required placeholder="e.g. Customer site, bank, Tiruppur" className="mt-1" /></div>
+              <div className="col-span-2"><label className="text-xs font-medium text-gray-600">Purpose*</label>
+                <textarea value={form.purpose} onChange={e => setForm(f => ({ ...f, purpose: e.target.value }))} required rows={2} placeholder="e.g. Mattress delivery & fitting" className="mt-1 w-full border rounded-md px-3 py-2 text-sm resize-none" /></div>
+              <div className="col-span-2 flex gap-3">
+                <Button type="submit" disabled={saving} className="bg-orange-600 hover:bg-orange-700 text-white">{saving ? 'Saving…' : editId ? 'Save Changes' : 'Submit OD'}</Button>
+                <Button type="button" variant="outline" onClick={() => { setShowForm(false); setEditId(null) }}>Cancel</Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="flex gap-2">
+        {['pending', 'approved', 'rejected', 'all'].map(s => (
+          <Button key={s} variant={statusFilter === s ? 'default' : 'outline'} size="sm" onClick={() => setStatusFilter(s)}
+            className={statusFilter === s ? 'bg-orange-600 hover:bg-orange-700 text-white' : ''}>
+            {s.charAt(0).toUpperCase() + s.slice(1)}
+          </Button>
+        ))}
+      </div>
+
+      <Card className="border-orange-100">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead><tr className="border-b border-orange-100 bg-orange-50">
+              <th className="px-4 py-3 text-left font-medium text-gray-600">Employee</th>
+              <th className="px-4 py-3 text-left font-medium text-gray-600">From</th>
+              <th className="px-4 py-3 text-left font-medium text-gray-600">To</th>
+              <th className="px-4 py-3 text-left font-medium text-gray-600">Days</th>
+              <th className="px-4 py-3 text-left font-medium text-gray-600">Out / In</th>
+              <th className="px-4 py-3 text-left font-medium text-gray-600">Place</th>
+              <th className="px-4 py-3 text-left font-medium text-gray-600">Purpose</th>
+              <th className="px-4 py-3 text-left font-medium text-gray-600">Status</th>
+              <th className="px-4 py-3 text-left font-medium text-gray-600">Actions</th>
+            </tr></thead>
+            <tbody>
+              {requests.length === 0 ? (
+                <tr><td colSpan={9} className="py-12 text-center text-gray-400">No OD requests</td></tr>
+              ) : requests.map(r => (
+                <tr key={r.id} className="border-b border-gray-50 hover:bg-orange-50/30">
+                  <td className="px-4 py-3 font-medium text-gray-900">{r.employee_name}<div className="text-xs text-gray-400">{r.employee_code}</div></td>
+                  <td className="px-4 py-3 text-gray-600">{fmtDate(r.start_date)}</td>
+                  <td className="px-4 py-3 text-gray-600">{fmtDate(r.end_date)}</td>
+                  <td className="px-4 py-3 font-semibold text-gray-900">{r.days}</td>
+                  <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{r.out_time || r.in_time ? `${fmtTime(r.out_time ?? null)} – ${fmtTime(r.in_time ?? null)}` : '—'}</td>
+                  <td className="px-4 py-3 text-gray-600">{r.place || '—'}</td>
+                  <td className="px-4 py-3 text-gray-500 max-w-xs truncate">{r.purpose || '—'}</td>
+                  <td className="px-4 py-3"><StatusBadge status={r.status} /></td>
+                  <td className="px-4 py-3">
+                    <div className="flex gap-1">
+                      {r.status === 'pending' && (
+                        <>
+                          <Button size="sm" onClick={() => handleAction(r.id, 'approve')} className="h-7 px-2 bg-green-600 hover:bg-green-700 text-white text-xs">Approve</Button>
+                          <Button size="sm" onClick={() => handleAction(r.id, 'reject')} className="h-7 px-2 bg-red-500 hover:bg-red-600 text-white text-xs">Reject</Button>
+                          <Button size="sm" variant="outline" onClick={() => startEdit(r)} className="h-7 px-2 text-xs">Edit</Button>
+                        </>
+                      )}
+                      <Button size="sm" variant="outline" onClick={() => printODSlip(r)} className="h-7 px-2 text-xs">Print Slip</Button>
                       <Button size="sm" variant="outline" onClick={() => handleDelete(r)} className="h-7 px-2 text-xs text-red-500 hover:text-red-600 hover:bg-red-50">Delete</Button>
                     </div>
                   </td>
@@ -2357,6 +2602,7 @@ const STATUS_META: Record<string, { code: string; bg: string; text: string }> = 
   absent:   { code: 'A',  bg: 'bg-red-100',    text: 'text-red-600'    },
   half_day: { code: 'HD', bg: 'bg-yellow-100', text: 'text-yellow-700' },
   on_leave: { code: 'CL', bg: 'bg-blue-100',   text: 'text-blue-700'   },
+  on_duty:  { code: 'OD', bg: 'bg-teal-100',   text: 'text-teal-700'   },
 }
 
 function DayCell({ rec, isSunday }: { rec: any; isSunday: boolean }) {
@@ -2373,7 +2619,7 @@ function DayCell({ rec, isSunday }: { rec: any; isSunday: boolean }) {
   // Single punch = amber
   const isSingle = Number(rec.punch_count) === 1
   let m = STATUS_META[rec.status] || { code: rec.status, bg: 'bg-gray-100', text: 'text-gray-600' }
-  if (isSingle && rec.status !== 'absent') m = { code: 'P', bg: 'bg-amber-100', text: 'text-amber-700' }
+  if (isSingle && rec.status !== 'absent' && rec.status !== 'on_duty') m ={ code: 'P', bg: 'bg-amber-100', text: 'text-amber-700' }
   return (
     <td className="px-0 py-1 text-center relative">
       <span className={`inline-block w-7 rounded text-[11px] font-bold ${m.bg} ${m.text}`}>{m.code}</span>
@@ -2410,17 +2656,17 @@ function AttendanceSheetSection({ departments }: { departments: Department[] }) 
     const XLSX = await import('xlsx')
     const header = ['S.No', 'Emp ID', 'Name', 'Department',
       ...(data.days || []).map((d: any) => `${d.day}\n${d.dow}`),
-      'P', 'A', 'HD', 'CL', 'Sun', 'Late', 'Total']
+      'P', 'A', 'HD', 'CL', 'OD', 'Sun', 'Late', 'Total']
     const rows = (data.employees || []).map((emp: any, i: number) => [
       i + 1, emp.employee_code, emp.name, emp.department_name,
       ...(data.days || []).map((d: any) => {
         const r = emp.attendance[d.day]
         if (!r) return d.is_sunday ? 'Sun' : 'A'
         const code = STATUS_META[r.status]?.code || r.status
-        return r.punch_count === 1 ? 'P*' : code
+        return r.punch_count === 1 && r.status !== 'on_duty' ? 'P*' : code
       }),
       emp.summary.present, emp.summary.absent, emp.summary.half_day,
-      emp.summary.on_leave, emp.summary.sundays,
+      emp.summary.on_leave, emp.summary.on_duty ?? 0, emp.summary.sundays,
       emp.summary.late_morning ?? 0, data.total_days,
     ])
     const ws = XLSX.utils.aoa_to_sheet([header, ...rows])
@@ -2488,6 +2734,7 @@ function AttendanceSheetSection({ departments }: { departments: Department[] }) 
           ['A','Absent','text-red-500'],
           ['HD','Half Day','text-yellow-700'],
           ['CL','Leave','text-blue-700'],
+          ['OD','On Duty','text-teal-700'],
           ['Sun','Sunday','text-orange-400'],
         ].map(([c,l,t],i) => (
           <span key={i}><span className={`font-bold ${t}`}>{c}</span> = {l}</span>
@@ -2510,7 +2757,7 @@ function AttendanceSheetSection({ departments }: { departments: Department[] }) 
                   <th colSpan={days.length} className="border border-gray-200 bg-orange-600 text-white px-3 py-2 text-center text-sm font-bold">
                     {MONTHS_FULL[month-1].toUpperCase()} {year}
                   </th>
-                  <th colSpan={7} className="border border-gray-200 bg-orange-600 text-white px-3 py-2 text-center text-sm font-bold">SUMMARY</th>
+                  <th colSpan={8} className="border border-gray-200 bg-orange-600 text-white px-3 py-2 text-center text-sm font-bold">SUMMARY</th>
                 </tr>
                 {/* Column headers row 1 — day numbers */}
                 <tr className="bg-orange-50">
@@ -2527,6 +2774,7 @@ function AttendanceSheetSection({ departments }: { departments: Department[] }) 
                   <th className="border border-gray-200 px-1 py-1.5 text-center text-red-600 font-bold w-8">A</th>
                   <th className="border border-gray-200 px-1 py-1.5 text-center text-yellow-700 font-bold w-9">HD</th>
                   <th className="border border-gray-200 px-1 py-1.5 text-center text-blue-700 font-bold w-8">CL</th>
+                  <th className="border border-gray-200 px-1 py-1.5 text-center text-teal-700 font-bold w-8">OD</th>
                   <th className="border border-gray-200 px-1 py-1.5 text-center text-orange-500 font-bold w-9">Sun</th>
                   <th className="border border-gray-200 px-1 py-1.5 text-center text-orange-700 font-bold w-9" title="Morning Late Count">Late</th>
                   <th className="border border-gray-200 px-1 py-1.5 text-center text-gray-700 font-bold w-10">Total</th>
@@ -2539,13 +2787,13 @@ function AttendanceSheetSection({ departments }: { departments: Department[] }) 
                       {d.dow}
                     </th>
                   ))}
-                  <th colSpan={7} className="border border-gray-200" />
+                  <th colSpan={8} className="border border-gray-200" />
                 </tr>
               </thead>
 
               <tbody>
                 {employees.length === 0 ? (
-                  <tr><td colSpan={4 + days.length + 7} className="py-16 text-center text-gray-400">No employees found</td></tr>
+                  <tr><td colSpan={4 + days.length + 8} className="py-16 text-center text-gray-400">No employees found</td></tr>
                 ) : employees.map((emp, idx) => (
                   <React.Fragment key={emp.id}>
                     <tr
@@ -2563,6 +2811,7 @@ function AttendanceSheetSection({ departments }: { departments: Department[] }) 
                       <td className="border border-gray-100 px-1 py-1.5 text-center font-bold text-red-600">{emp.summary.absent}</td>
                       <td className="border border-gray-100 px-1 py-1.5 text-center font-bold text-yellow-700">{emp.summary.half_day}</td>
                       <td className="border border-gray-100 px-1 py-1.5 text-center font-bold text-blue-700">{emp.summary.on_leave}</td>
+                      <td className="border border-gray-100 px-1 py-1.5 text-center font-bold text-teal-700">{emp.summary.on_duty ?? 0}</td>
                       <td className="border border-gray-100 px-1 py-1.5 text-center font-bold text-orange-500">{emp.summary.sundays}</td>
                       <td className="border border-gray-100 px-1 py-1.5 text-center font-bold text-orange-700">{emp.summary.late_morning ?? 0}</td>
                       <td className="border border-gray-100 px-1 py-1.5 text-center font-bold text-gray-700">{data.total_days}</td>
@@ -2571,7 +2820,7 @@ function AttendanceSheetSection({ departments }: { departments: Department[] }) 
                     {/* Expanded detail table — morning late / lunch late */}
                     {expandedEmp === emp.id && (
                       <tr key={`${emp.id}-expanded`}>
-                        <td colSpan={4 + days.length + 7} className="border border-orange-200 bg-orange-50/50 p-0">
+                        <td colSpan={4 + days.length + 8} className="border border-orange-200 bg-orange-50/50 p-0">
                           <div className="px-4 pt-3 pb-4">
                             <p className="text-xs font-semibold text-orange-700 mb-2">
                               {emp.name} — {MONTHS_FULL[month-1]} {year} · punch detail
@@ -3060,6 +3309,7 @@ export default function HRModule({ activeTab = 'dashboard' }: { activeTab?: stri
         {activeTab === 'attendance-sheet' && <AttendanceSheetSection departments={departments} />}
         {activeTab === 'shifts' && <ShiftsSection />}
         {activeTab === 'leave' && <LeaveSection employees={employees} />}
+        {activeTab === 'od' && <ODSection employees={employees} />}
         {activeTab === 'payroll' && <PayrollSection />}
         {activeTab === 'departments' && <DepartmentsSection departments={departments} reload={loadDepartments} />}
     </div>

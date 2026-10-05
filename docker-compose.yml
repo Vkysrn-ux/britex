@@ -14,7 +14,7 @@ services:
       - "traefik.enable=true"
       - "traefik.docker.network=common-net"
 
-      - "traefik.http.routers.britex-erp.rule=Host(`erp.britexcbe.com`)"
+      - "traefik.http.routers.britex-erp.rule=Host(`erp.cortezindia.com`)"
       - "traefik.http.routers.britex-erp.entrypoints=websecure"
       - "traefik.http.routers.britex-erp.tls=true"
       - "traefik.http.routers.britex-erp.tls.certresolver=letsencrypt"
