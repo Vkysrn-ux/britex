@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS hr_od_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_hr_od_emp ON hr_od_requests(employee_id);
 CREATE INDEX IF NOT EXISTS idx_hr_od_status ON hr_od_requests(status);
+-- The app connects as mattress_app (owner of the other hr_* tables)
+ALTER TABLE hr_od_requests OWNER TO mattress_app;
 
 ALTER TABLE hr_attendance DROP CONSTRAINT IF EXISTS hr_attendance_status_check;
 ALTER TABLE hr_attendance ADD CONSTRAINT hr_attendance_status_check
