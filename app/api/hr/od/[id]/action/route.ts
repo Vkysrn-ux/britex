@@ -31,7 +31,7 @@ export async function POST(req: Request, { params }: Ctx) {
       // Mark every non-Sunday as on_duty; existing punches on those days are kept
       await db.execute(
         `INSERT INTO hr_attendance (employee_id, date, status)
-         SELECT :emp_id, d::date, 'on_duty'
+         SELECT :emp_id, CAST(d AS date), 'on_duty'
          FROM generate_series(CAST(:start AS date), CAST(:end AS date), interval '1 day') d
          WHERE EXTRACT(DOW FROM d) <> 0
          ON CONFLICT (employee_id, date) DO UPDATE SET status = 'on_duty'`,
