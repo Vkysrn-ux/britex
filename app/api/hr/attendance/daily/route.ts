@@ -74,7 +74,7 @@ export async function GET(req: Request) {
     const half_day = list.filter(r => r.status === 'half_day').length
     const on_leave = list.filter(r => r.status === 'on_leave').length
     const on_duty  = list.filter(r => r.status === 'on_duty').length
-    const absent   = list.filter(r => !r.status).length
+    const absent   = list.filter(r => !r.status || r.status === 'absent').length
 
     return NextResponse.json({
       date,

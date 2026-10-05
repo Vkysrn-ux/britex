@@ -12,14 +12,18 @@ const markSchema = z.object({
   notes: z.string().optional().nullable(),
 })
 
-// Same rules as the biometric listener: 09:00 + 10 min grace, under 4 hrs = half day
-const SHIFT_START_MINS = 9 * 60, GRACE = 10
+// Same rules as the biometric listener: 09:00 + 10 min grace; worked time
+// (out - in - 30 min lunch) under 3 hrs = absent, under 6 hrs = half day
+const SHIFT_START_MINS = 9 * 60, GRACE = 10, LUNCH_MINS = 30
+const HALF_DAY_MIN_MINS = 180, FULL_DAY_MIN_MINS = 360
 const toMins = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5))
 function computeStatus(check_in?: string | null, check_out?: string | null) {
   if (!check_in) return { status: 'absent' as const, late: 0 }
   const late = Math.max(0, toMins(check_in) - (SHIFT_START_MINS + GRACE))
-  if (check_in && check_out && toMins(check_out) - toMins(check_in) < 240) {
-    return { status: 'half_day' as const, late }
+  if (check_out) {
+    const worked = toMins(check_out) - toMins(check_in) - LUNCH_MINS
+    if (worked < HALF_DAY_MIN_MINS) return { status: 'absent' as const, late }
+    if (worked < FULL_DAY_MIN_MINS) return { status: 'half_day' as const, late }
   }
   return { status: late > 0 ? 'late' as const : 'present' as const, late }
 }

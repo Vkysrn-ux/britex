@@ -201,6 +201,10 @@ async function handleOperlog(req, res, sn) {
 }
 
 var LUNCH_MINS = parseInt(process.env.LUNCH_MINS || '30')
+// Worked time (span - permission - lunch): under 3 hr = absent,
+// 3 hr to under 6 hr = half day, 6 hr+ = full day (owner's rule)
+var HALF_DAY_MIN_MINS = parseInt(process.env.HALF_DAY_MIN_MINS || '180')
+var FULL_DAY_MIN_MINS = parseInt(process.env.FULL_DAY_MIN_MINS || '360')
 
 // Recompute a day's check_in/check_out/permission/status from every stored
 // punch (ascending). Punch pattern:
@@ -227,7 +231,9 @@ function computeDay(times, lateBase) {
   }
   var spanMins = toMins(checkOut) - toMins(checkIn)
   var workedMins = spanMins - permissionMins - LUNCH_MINS
-  var status = workedMins < 240 ? 'half_day' : (lateMins > 0 ? 'late' : 'present')
+  var status = workedMins < HALF_DAY_MIN_MINS ? 'absent'
+             : workedMins < FULL_DAY_MIN_MINS ? 'half_day'
+             : (lateMins > 0 ? 'late' : 'present')
 
   return { check_in: checkIn, check_out: checkOut, punch_count: n, permission_minutes: Math.max(0, permissionMins),
            needs_review: needsReview, status: status, late_morning_mins: lateMins }
