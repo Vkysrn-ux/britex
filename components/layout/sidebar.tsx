@@ -3,7 +3,7 @@ import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import {
   Users, UserCog, ChevronDown, ChevronRight, LayoutDashboard, CalendarCheck,
-  FileText, DollarSign, Building2, TableProperties, Clock, Briefcase,
+  FileText, DollarSign, Building2, TableProperties, Clock, Briefcase, CalendarDays,
   Factory, ClipboardList, BarChart3, Truck
 } from "lucide-react"
 
@@ -22,6 +22,7 @@ const HR_SUB_MODULES = [
   { id: "hr:shifts",           label: "Shifts",          icon: Clock },
   { id: "hr:leave",            label: "Leave",           icon: FileText },
   { id: "hr:od",               label: "OD (On Duty)",    icon: Briefcase },
+  { id: "hr:holidays",         label: "Holidays",        icon: CalendarDays },
   { id: "hr:payroll",          label: "Payroll",         icon: DollarSign },
   { id: "hr:departments",      label: "Departments",     icon: Building2 },
 ]

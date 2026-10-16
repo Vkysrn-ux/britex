@@ -4,7 +4,7 @@ export const runtime = 'nodejs'
 const CRON_SECRET = process.env.CRON_SECRET ?? ''
 const APP_URL     = (process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000').replace(/\/$/, '')
 
-// Called by cron at 05:00 UTC = 10:30 IST daily
+// Called by VPS crontab at 05:30 UTC = 11:00 IST daily
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const secret = searchParams.get('secret') ?? req.headers.get('x-cron-secret') ?? ''

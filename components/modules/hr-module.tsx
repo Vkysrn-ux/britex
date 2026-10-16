@@ -2228,6 +2228,97 @@ function ODSection({ employees }: { employees: Employee[] }) {
   )
 }
 
+// ─── Holidays ─────────────────────────────────────────────────────────────────
+// Sundays are always off. Dates listed here are extra holidays: the 11:00
+// WhatsApp report sends only who came in on these days, not who is absent.
+
+function HolidaysSection() {
+  const [year, setYear] = useState(new Date().getFullYear())
+  const [rows, setRows] = useState<{ date: string; name: string }[]>([])
+  const [form, setForm] = useState({ date: '', name: '' })
+  const [msg, setMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+
+  const load = useCallback(() => {
+    fetch(`/api/hr/holidays?year=${year}`).then(r => r.json()).then(d => setRows(d.data || []))
+  }, [year])
+  useEffect(() => { load() }, [load])
+
+  const add = async (ev: React.FormEvent) => {
+    ev.preventDefault(); setMsg(null)
+    try {
+      const res = await fetch('/api/hr/holidays', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form)
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setMsg({ text: 'Holiday saved.', type: 'success' })
+      setForm({ date: '', name: '' })
+      if (form.date.slice(0, 4) !== String(year)) setYear(Number(form.date.slice(0, 4))); else load()
+    } catch (err: any) { setMsg({ text: err.message, type: 'error' }) }
+  }
+
+  const remove = async (date: string, name: string) => {
+    if (!confirm(`Remove holiday "${name}"?`)) return
+    const res = await fetch(`/api/hr/holidays?date=${date}`, { method: 'DELETE' })
+    if (res.ok) load(); else setMsg({ text: (await res.json()).error, type: 'error' })
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-bold text-gray-900">Holidays</h2>
+          <p className="text-xs text-gray-500">Sundays are always off. On these days the 11:00 WhatsApp report lists only who is present.</p>
+        </div>
+        <div className="flex items-center gap-1 border rounded-lg overflow-hidden">
+          <button onClick={() => setYear(y => y - 1)} className="px-3 py-2 hover:bg-gray-100 text-gray-600">‹</button>
+          <span className="px-3 py-2 font-semibold text-sm">{year}</span>
+          <button onClick={() => setYear(y => y + 1)} className="px-3 py-2 hover:bg-gray-100 text-gray-600">›</button>
+        </div>
+      </div>
+
+      {msg && <div className={`p-3 rounded-lg text-sm ${msg.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>{msg.text}</div>}
+
+      <Card className="border-orange-200">
+        <CardContent className="pt-4">
+          <form onSubmit={add} className="flex flex-wrap gap-3 items-end">
+            <div><label className="text-xs font-medium text-gray-600">Date*</label>
+              <Input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} required className="mt-1" /></div>
+            <div className="flex-1 min-w-[200px]"><label className="text-xs font-medium text-gray-600">Holiday Name*</label>
+              <Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required placeholder="e.g. Deepavali" className="mt-1" /></div>
+            <Button type="submit" className="bg-orange-600 hover:bg-orange-700 text-white"><Plus className="w-4 h-4 mr-2" />Add Holiday</Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card className="border-orange-100">
+        <table className="w-full text-sm">
+          <thead><tr className="border-b border-orange-100 bg-orange-50">
+            <th className="px-4 py-3 text-left font-medium text-gray-600">Date</th>
+            <th className="px-4 py-3 text-left font-medium text-gray-600">Day</th>
+            <th className="px-4 py-3 text-left font-medium text-gray-600">Holiday</th>
+            <th className="px-4 py-3 text-left font-medium text-gray-600"></th>
+          </tr></thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr><td colSpan={4} className="py-12 text-center text-gray-400">No holidays added for {year}</td></tr>
+            ) : rows.map(h => (
+              <tr key={h.date} className="border-b border-gray-50 hover:bg-orange-50/30">
+                <td className="px-4 py-3 text-gray-900">{fmtDate(h.date)}</td>
+                <td className="px-4 py-3 text-gray-500">{new Date(h.date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'long' })}</td>
+                <td className="px-4 py-3 font-medium text-gray-900">{h.name}</td>
+                <td className="px-4 py-3 text-right">
+                  <Button size="sm" variant="outline" onClick={() => remove(h.date, h.name)} className="h-7 px-2 text-xs text-red-500 hover:text-red-600 hover:bg-red-50">Delete</Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  )
+}
+
 // ─── Payroll ──────────────────────────────────────────────────────────────────
 
 function PayrollSection() {
@@ -3310,6 +3401,7 @@ export default function HRModule({ activeTab = 'dashboard' }: { activeTab?: stri
         {activeTab === 'shifts' && <ShiftsSection />}
         {activeTab === 'leave' && <LeaveSection employees={employees} />}
         {activeTab === 'od' && <ODSection employees={employees} />}
+        {activeTab === 'holidays' && <HolidaysSection />}
         {activeTab === 'payroll' && <PayrollSection />}
         {activeTab === 'departments' && <DepartmentsSection departments={departments} reload={loadDepartments} />}
     </div>

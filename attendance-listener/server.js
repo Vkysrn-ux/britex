@@ -152,6 +152,9 @@ app.post(['/iclock/cdata', '/iclock/cdata.aspx'], async function(req, res) {
   log('POST ' + req.path + ' table=' + table + ' SN=' + sn)
   if (table.toUpperCase() === 'ATTLOG')  return await handleAttlog(req, res, sn)
   if (table.toUpperCase() === 'OPERLOG') return await handleOperlog(req, res, sn)
+  // Reply to DATA QUERY USERINFO — lines are "PIN=69\tName=...\t..."
+  if (table.toUpperCase() === 'USERINFO' || table.toUpperCase() === 'USER') return await handleOperlog(req, res, sn)
+  log('  unhandled table body: ' + String(typeof req.body === 'string' ? req.body : '').slice(0, 500))
   res.send('OK')
 })
 
@@ -173,7 +176,8 @@ async function handleOperlog(req, res, sn) {
   var saved = 0
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i]
-    if (!line.toUpperCase().startsWith('USER')) continue
+    var up = line.toUpperCase()
+    if (!up.startsWith('USER') && !up.startsWith('PIN=')) continue
     // Format: USER\tPIN=5\tName=Kalaiselvi.S\tPri=0\tPasswd=\tCard=...\t...
     var pin = '', name = '', pri = 0, card = ''
     var parts = line.split('\t')
@@ -191,6 +195,14 @@ async function handleOperlog(req, res, sn) {
         [pin, name, pri, card]
       )
       log('  USER PIN=' + pin + ' Name=' + name)
+      // Give an auto-created placeholder employee its real name
+      if (name) {
+        var ren = await pool.query(
+          "UPDATE hr_employees SET first_name=$1 WHERE employee_code=$2 AND first_name LIKE 'New PIN %'",
+          [name, DEVICE_PREFIX + '-' + pin.padStart(2, '0')]
+        )
+        if (ren.rowCount) log('  Renamed placeholder ' + DEVICE_PREFIX + '-' + pin + ' -> ' + name)
+      }
       saved++
     } catch(e) { log('  Error saving user: ' + e.message) }
   }
@@ -263,8 +275,17 @@ async function handleAttlog(req, res, sn) {
         [empCode, pin.padStart(2,'0'), pin]
       )
       if (empRes.rows.length === 0) {
-        log('  No employee for PIN=' + pin + ' (tried ' + empCode + ')')
-        skipped++; continue
+        // New enrollee on the device: create a placeholder employee so the
+        // punch isn't lost, and ask the device for the real name
+        empRes = await pool.query(
+          "INSERT INTO hr_employees(employee_code, first_name, date_of_joining, status) VALUES($1,$2,$3,'active') " +
+          "ON CONFLICT (employee_code) DO UPDATE SET employee_code=EXCLUDED.employee_code RETURNING id",
+          [empCode, 'New PIN ' + pin, dateStr]
+        )
+        var q = { id: nextCmdId++, pin: pin, name: 'name of PIN ' + pin, cmd: 'DATA QUERY USERINFO PIN=' + pin,
+                  status: 'pending', return_code: null }
+        cmdQueue.push(q)
+        log('  NEW EMPLOYEE auto-created ' + empCode + ' for PIN=' + pin + ' (name requested from device)')
       }
       var empId     = empRes.rows[0].id
       var punchTime = timeStr.slice(0, 8)
@@ -410,6 +431,22 @@ app.post('/admin/resync-attlog', function(req, res) {
   cmdQueue.push(item)
   log('ADMIN queued ATTLOG resync ' + start + ' .. ' + end + ' (cmd ' + item.id + ')')
   res.json({ queued: item.id, cmd: cmd, note: 'Device re-sends matching punches on next poll via the normal ATTLOG channel' })
+})
+
+// Ask the device for enrolled users' names (it never pushes them on its own).
+// Replies arrive as cdata table=USERINFO and land in device_users.
+//   POST /admin/query-users?token=...&pins=69,70,71   (no pins = all users)
+app.post('/admin/query-users', function(req, res) {
+  if (!checkToken(req, res)) return
+  var pins = String(req.query.pins || '').split(',').map(function(p) { return p.trim() }).filter(Boolean)
+  var cmds = pins.length ? pins.map(function(p) { return 'DATA QUERY USERINFO PIN=' + p }) : ['DATA QUERY USERINFO']
+  var queued = cmds.map(function(cmd) {
+    var item = { id: nextCmdId++, pin: null, name: cmd, cmd: cmd, status: 'pending', return_code: null }
+    cmdQueue.push(item)
+    return item.id
+  })
+  log('ADMIN queued USERINFO query ' + (pins.join(',') || 'all'))
+  res.json({ queued: queued, note: 'Names land in device_users once the device replies' })
 })
 
 // Clear the queue (e.g. before retrying with the other mode)
