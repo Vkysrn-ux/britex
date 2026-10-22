@@ -720,6 +720,279 @@ function EmployeePayrollTab({ emp, onEmpUpdate }: { emp: any; onEmpUpdate: (e: a
   )
 }
 
+// ─── Bulk edit employees (grid + Excel round-trip) ──────────────────────────────
+
+type BulkRow = {
+  id: number; employee_code: string; first_name: string; last_name: string | null
+  department_id: number | null; job_title: string | null; phone: string | null
+  gender: string | null; date_of_joining: string; day_rate: number; status: string
+}
+type BulkField = Exclude<keyof BulkRow, 'id' | 'employee_code'>
+
+const BULK_COLS: { key: BulkField; header: string; w: string }[] = [
+  { key: 'first_name',      header: 'First Name',   w: 'min-w-[150px]' },
+  { key: 'last_name',       header: 'Last Name',    w: 'min-w-[120px]' },
+  { key: 'department_id',   header: 'Department',   w: 'min-w-[130px]' },
+  { key: 'job_title',       header: 'Job Title',    w: 'min-w-[110px]' },
+  { key: 'phone',           header: 'Phone',        w: 'min-w-[115px]' },
+  { key: 'gender',          header: 'Gender',       w: 'min-w-[90px]'  },
+  { key: 'date_of_joining', header: 'Joining Date', w: 'min-w-[135px]' },
+  { key: 'day_rate',        header: 'Day Rate',     w: 'min-w-[85px]'  },
+  { key: 'status',          header: 'Status',       w: 'min-w-[100px]' },
+]
+
+const norm = (v: any) => (v === null || v === undefined ? '' : String(v).trim())
+
+// Excel dates arrive as serial numbers or as text (YYYY-MM-DD or DD/MM/YYYY)
+function excelDate(v: any): string | null {
+  if (v === '' || v === null || v === undefined) return null
+  if (typeof v === 'number') {
+    const d = new Date(Math.round((v - 25569) * 86400000))
+    return d.toISOString().slice(0, 10)
+  }
+  const s = String(v).trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s
+  const m = s.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})$/)
+  if (m) {
+    const y = m[3].length === 2 ? '20' + m[3] : m[3]
+    return `${y}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`
+  }
+  return 'invalid'
+}
+
+function BulkEditEmployees({ departments, onClose, onSaved }: { departments: Department[]; onClose: () => void; onSaved: () => void }) {
+  const [original, setOriginal] = useState<Record<number, BulkRow>>({})
+  const [draft, setDraft] = useState<BulkRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState('active')
+  const [msg, setMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+  const [uploadNotes, setUploadNotes] = useState<string[]>([])
+
+  const load = useCallback(() => {
+    setLoading(true)
+    fetch('/api/hr/employees/bulk').then(r => r.json()).then(d => {
+      const rows: BulkRow[] = (d.data || []).map((r: any) => ({ ...r, day_rate: Number(r.day_rate) || 0 }))
+      setOriginal(Object.fromEntries(rows.map(r => [r.id, r])))
+      setDraft(rows.map(r => ({ ...r })))
+      setLoading(false)
+    }).catch(() => setLoading(false))
+  }, [])
+  useEffect(() => { load() }, [load])
+
+  const deptName = (id: number | null) => departments.find(d => d.id === id)?.name || ''
+  const isChanged = (r: BulkRow, k: BulkField) => norm(original[r.id]?.[k]) !== norm(r[k])
+  const changedRows = draft.filter(r => BULK_COLS.some(c => isChanged(r, c.key)))
+
+  const setCell = (id: number, k: BulkField, v: any) =>
+    setDraft(rows => rows.map(r => r.id === id ? { ...r, [k]: v } : r))
+
+  const q = search.trim().toLowerCase()
+  const visible = draft.filter(r =>
+    (statusFilter === 'all' || original[r.id]?.status === statusFilter || isChanged(r, 'status')) &&
+    (!q || `${r.employee_code} ${r.first_name} ${r.last_name || ''}`.toLowerCase().includes(q)))
+
+  const handleDownload = async () => {
+    const XLSX = await import('xlsx')
+    const header = ['Emp Code', ...BULK_COLS.map(c => c.header)]
+    const rows = draft.map(r => [r.employee_code, r.first_name, r.last_name || '', deptName(r.department_id),
+      r.job_title || '', r.phone || '', r.gender || '', r.date_of_joining || '', r.day_rate, r.status])
+    const ws = XLSX.utils.aoa_to_sheet([header, ...rows])
+    ws['!cols'] = header.map((_, i) => ({ wch: i === 1 ? 22 : 14 }))
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Employees')
+    XLSX.writeFile(wb, `Britex_Employees_${new Date().toISOString().slice(0, 10)}.xlsx`)
+  }
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setMsg(null); setUploadNotes([])
+    try {
+      const XLSX = await import('xlsx')
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
+      const sheet: any[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '', raw: true })
+      if (!sheet.length) throw new Error('The sheet is empty')
+
+      // Match headers loosely ("emp code", "EMP CODE", "Emp Code ")
+      const key = (s: string) => s.toLowerCase().replace(/[^a-z]/g, '')
+      const headerMap: Record<string, string> = {}
+      for (const h of Object.keys(sheet[0])) headerMap[key(h)] = h
+      const codeCol = headerMap['empcode'] || headerMap['employeecode'] || headerMap['code']
+      if (!codeCol) throw new Error('Column "Emp Code" not found — download the Excel from here and edit that file')
+
+      const byCode = new Map(draft.map(r => [r.employee_code.toUpperCase(), r]))
+      const notes: string[] = []
+      const patches = new Map<number, Partial<BulkRow>>()
+      sheet.forEach((row, i) => {
+        const code = norm(row[codeCol]).toUpperCase()
+        if (!code) return
+        const emp = byCode.get(code)
+        if (!emp) { notes.push(`Row ${i + 2}: ${code} is not in the ERP — skipped (add new employees with Add Employee)`); return }
+        const p: Partial<BulkRow> = {}
+        for (const c of BULK_COLS) {
+          const col = headerMap[key(c.header)]
+          if (!col) continue // column left out of the sheet = don't touch it
+          const raw = row[col]
+          if (c.key === 'department_id') {
+            const name = norm(raw)
+            if (!name) { p.department_id = null; continue }
+            const d = departments.find(d => d.name.toLowerCase() === name.toLowerCase())
+            if (!d) { notes.push(`Row ${i + 2} (${code}): department "${name}" doesn't exist — left unchanged`); continue }
+            p.department_id = d.id
+          } else if (c.key === 'date_of_joining') {
+            const d = excelDate(raw)
+            if (!d) continue
+            if (d === 'invalid') { notes.push(`Row ${i + 2} (${code}): joining date "${norm(raw)}" not understood — left unchanged`); continue }
+            p.date_of_joining = d
+          } else if (c.key === 'day_rate') {
+            const n = Number(norm(raw) || 0)
+            if (isNaN(n) || n < 0) { notes.push(`Row ${i + 2} (${code}): day rate "${norm(raw)}" is not a number — left unchanged`); continue }
+            p.day_rate = n
+          } else if (c.key === 'gender' || c.key === 'status') {
+            const v = norm(raw).toLowerCase()
+            const allowed = c.key === 'gender' ? ['male', 'female', 'other', ''] : ['active', 'inactive', 'terminated']
+            if (!allowed.includes(v)) { notes.push(`Row ${i + 2} (${code}): ${c.header.toLowerCase()} "${norm(raw)}" not allowed (${allowed.filter(Boolean).join('/')}) — left unchanged`); continue }
+            ;(p as any)[c.key] = v || null
+          } else if (c.key === 'first_name') {
+            const v = norm(raw)
+            if (!v) { notes.push(`Row ${i + 2} (${code}): first name is blank — left unchanged`); continue }
+            p.first_name = v
+          } else {
+            ;(p as any)[c.key] = norm(raw) || null
+          }
+        }
+        patches.set(emp.id, p)
+      })
+
+      const next = draft.map(r => patches.has(r.id) ? { ...r, ...patches.get(r.id) } : r)
+      const changed = next.filter(r => BULK_COLS.some(c => norm(original[r.id]?.[c.key]) !== norm(r[c.key]))).length
+      setDraft(next)
+      setStatusFilter('all')
+      setUploadNotes(notes)
+      setMsg({ text: `Loaded "${file.name}": ${changed} employee(s) have changes — check the orange cells, then press Save.`, type: 'success' })
+    } catch (err: any) {
+      setMsg({ text: err.message || 'Could not read the file', type: 'error' })
+    }
+  }
+
+  const handleSave = async () => {
+    if (!changedRows.length) return
+    setSaving(true); setMsg(null)
+    try {
+      const updates = changedRows.map(r => {
+        const u: Record<string, any> = { id: r.id }
+        for (const c of BULK_COLS) if (isChanged(r, c.key)) u[c.key] = r[c.key] ?? ''
+        return u
+      })
+      const res = await fetch('/api/hr/employees/bulk', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ updates })
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setMsg({ text: `Saved changes for ${data.updated} employee(s).`, type: 'success' })
+      setUploadNotes([])
+      load(); onSaved()
+    } catch (err: any) { setMsg({ text: err.message, type: 'error' }) }
+    finally { setSaving(false) }
+  }
+
+  const cellCls = (changed: boolean) =>
+    `w-full border rounded px-2 py-1 text-xs ${changed ? 'border-orange-400 bg-orange-50 font-semibold' : 'border-gray-200 bg-white'}`
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-xl font-bold text-gray-900">Bulk Edit Employees</h2>
+          <p className="text-xs text-gray-500">Edit cells below, or download the Excel, change it and upload it back. Changed cells turn orange — nothing is saved until you press Save.</p>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={handleDownload} className="inline-flex items-center gap-1.5 px-3 py-2 bg-green-600 hover:bg-green-700 text-white text-sm rounded-lg font-medium">Download Excel</button>
+          <label htmlFor="bulk-upload" className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-2 bg-orange-600 hover:bg-orange-700 text-white text-sm rounded-lg font-medium">Upload Edited Excel</label>
+          <input id="bulk-upload" type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleUpload} />
+          <Button variant="outline" onClick={() => { if (!changedRows.length || confirm('Discard all unsaved changes?')) onClose() }}>Close</Button>
+        </div>
+      </div>
+
+      {msg && <div className={`p-3 rounded-lg text-sm ${msg.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>{msg.text}</div>}
+      {uploadNotes.length > 0 && (
+        <div className="p-3 rounded-lg text-xs bg-yellow-50 text-yellow-800 border border-yellow-200 space-y-0.5 max-h-40 overflow-y-auto">
+          {uploadNotes.map((n, i) => <div key={i}>⚠ {n}</div>)}
+        </div>
+      )}
+
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Input placeholder="Search name or BT number…" value={search} onChange={e => setSearch(e.target.value)} className="pl-9 text-sm" />
+        </div>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="border rounded-lg px-3 py-2 text-sm">
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+          <option value="terminated">Terminated</option>
+          <option value="all">All</option>
+        </select>
+        <span className="text-sm text-gray-500">{changedRows.length} employee(s) changed</span>
+        {changedRows.length > 0 && (
+          <Button variant="outline" onClick={() => { setDraft(Object.values(original).map(r => ({ ...r }))); setUploadNotes([]); setMsg(null) }}>Discard Changes</Button>
+        )}
+        <Button onClick={handleSave} disabled={!changedRows.length || saving} className="bg-orange-600 hover:bg-orange-700 text-white">
+          {saving ? 'Saving…' : `Save ${changedRows.length || ''} Change${changedRows.length === 1 ? '' : 's'}`}
+        </Button>
+      </div>
+
+      {loading ? (
+        <div className="py-20 text-center text-gray-400">Loading employees…</div>
+      ) : (
+        <div className="border border-orange-100 rounded-xl overflow-auto max-h-[70vh]">
+          <table className="text-xs border-collapse w-full">
+            <thead className="sticky top-0 z-10 bg-orange-50">
+              <tr>
+                <th className="px-2 py-2 text-left font-semibold text-gray-600 border-b border-orange-100">Emp Code</th>
+                {BULK_COLS.map(c => <th key={c.key} className={`px-2 py-2 text-left font-semibold text-gray-600 border-b border-orange-100 ${c.w}`}>{c.header}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {visible.length === 0 ? (
+                <tr><td colSpan={BULK_COLS.length + 1} className="py-12 text-center text-gray-400">No employees</td></tr>
+              ) : visible.map(r => (
+                <tr key={r.id} className="border-b border-gray-50 hover:bg-orange-50/30">
+                  <td className="px-2 py-1 font-mono text-gray-600 whitespace-nowrap">{r.employee_code}</td>
+                  <td className="px-1 py-1"><input value={r.first_name} onChange={e => setCell(r.id, 'first_name', e.target.value)} className={cellCls(isChanged(r, 'first_name'))} /></td>
+                  <td className="px-1 py-1"><input value={r.last_name || ''} onChange={e => setCell(r.id, 'last_name', e.target.value)} className={cellCls(isChanged(r, 'last_name'))} /></td>
+                  <td className="px-1 py-1">
+                    <select value={r.department_id ?? ''} onChange={e => setCell(r.id, 'department_id', e.target.value ? Number(e.target.value) : null)} className={cellCls(isChanged(r, 'department_id'))}>
+                      <option value="">—</option>
+                      {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </select>
+                  </td>
+                  <td className="px-1 py-1"><input value={r.job_title || ''} onChange={e => setCell(r.id, 'job_title', e.target.value)} className={cellCls(isChanged(r, 'job_title'))} /></td>
+                  <td className="px-1 py-1"><input value={r.phone || ''} onChange={e => setCell(r.id, 'phone', e.target.value)} className={cellCls(isChanged(r, 'phone'))} /></td>
+                  <td className="px-1 py-1">
+                    <select value={r.gender || ''} onChange={e => setCell(r.id, 'gender', e.target.value || null)} className={cellCls(isChanged(r, 'gender'))}>
+                      <option value="">—</option><option value="male">Male</option><option value="female">Female</option><option value="other">Other</option>
+                    </select>
+                  </td>
+                  <td className="px-1 py-1"><input type="date" value={r.date_of_joining || ''} onChange={e => setCell(r.id, 'date_of_joining', e.target.value)} className={cellCls(isChanged(r, 'date_of_joining'))} /></td>
+                  <td className="px-1 py-1"><input type="number" min="0" step="1" value={r.day_rate} onChange={e => setCell(r.id, 'day_rate', e.target.value === '' ? 0 : Number(e.target.value))} className={`${cellCls(isChanged(r, 'day_rate'))} text-right ${!r.day_rate ? 'text-red-500' : ''}`} /></td>
+                  <td className="px-1 py-1">
+                    <select value={r.status} onChange={e => setCell(r.id, 'status', e.target.value)} className={cellCls(isChanged(r, 'status'))}>
+                      <option value="active">Active</option><option value="inactive">Inactive</option><option value="terminated">Terminated</option>
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function EmployeesSection({ departments }: { departments: Department[] }) {
   const [employees, setEmployees]   = useState<Employee[]>([])
   const [loading, setLoading]       = useState(true)
@@ -743,6 +1016,7 @@ function EmployeesSection({ departments }: { departments: Department[] }) {
   const [resetResult, setResetResult] = useState<any>(null)
   const [importingDat, setImportingDat] = useState(false)
   const [datResult, setDatResult]       = useState<any>(null)
+  const [showBulk, setShowBulk]         = useState(false)
 
   const blankForm = {
     employee_code: '', first_name: '', last_name: '', email: '', phone: '',
@@ -865,6 +1139,10 @@ function EmployeesSection({ departments }: { departments: Department[] }) {
   const totalActive   = employees.filter(e => e.status === 'active').length
   const totalInactive = employees.filter(e => e.status !== 'active').length
 
+  if (showBulk) {
+    return <BulkEditEmployees departments={departments} onClose={() => setShowBulk(false)} onSaved={load} />
+  }
+
   if (profileEmp) {
     return (
       <EmployeeProfilePage
@@ -884,6 +1162,10 @@ function EmployeesSection({ departments }: { departments: Department[] }) {
           Centralized management for all <strong>{employees.length}</strong> employees across <strong>{departments.length}</strong> departments.
         </p>
         <div className="flex items-center gap-2">
+          <button onClick={() => setShowBulk(true)}
+            className="inline-flex items-center gap-2 px-3 py-2 border border-orange-300 bg-white hover:bg-orange-50 text-orange-700 text-sm rounded-lg font-medium">
+            <Edit2 className="w-4 h-4" />Bulk Edit
+          </button>
           <label htmlFor="xl-upload" className="cursor-pointer inline-flex items-center gap-2 px-3 py-2 bg-orange-600 hover:bg-orange-700 text-white text-sm rounded-lg font-medium">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
             Upload Excel
