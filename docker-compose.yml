@@ -7,6 +7,11 @@ services:
     restart: always
     env_file:
       - .env.local
+    environment:
+      # Listen on every network — Next binds to the container hostname by
+      # default, which can resolve to the DB network instead of common-net
+      # (Traefik's) after a reboot, giving 502s
+      HOSTNAME: "0.0.0.0"
     networks:
       - common-net
       - postgress_default
